@@ -32,11 +32,48 @@ Here are some definitions to folders referenced in the docs below.
 - `<scripts>` - alias for `<factory>/scripts/`
 - `<job.js>` - alias for `node <scripts>/job.js`
 
+## Config
+
+`config.json` sets up the factory for this repo:
+
+- `concurrency`, `max_rounds`: how many jobs run at once, and how many build rounds a job gets.
+- `base_branch`: the branch jobs start from and pull requests target.
+- `agents`: the model for each agent.
+- `gate`: shell commands that must all pass after every build (tests, lint, typecheck, build).
+- `pull_request.APPROVE` and `pull_request.ESCALATE`: shell commands `approver complete` runs in the job's worktree to open the pull request. Set a list to `[]` to open no PR. See [Pull requests](#pull-requests).
+
+## Pull requests
+
+When the approver finishes, `approver complete` opens a pull request for the job, whatever the decision:
+
+- **APPROVE**: labelled `auto-merge`, and set to merge on its own once the host's checks pass.
+- **ESCALATE**: labelled `needs-human-review`.
+
+The PR's title is the job's title (`job create --title`) and its description is the approver's decision. Running it again updates the same PR instead of opening a second one.
+
+`scripts/` has a ready-made script for each host. Point both `config.json -> pull_request` lists at the one for yours:
+
+| Host | Script | Needs |
+|---|---|---|
+| GitHub (default) | `scripts/github/pull-request.sh` | `gh`, logged in. Auto-merge needs "Allow auto-merge" on in the repo settings. |
+| Azure DevOps | `scripts/azure-devops/pull-request.sh` | `az` with the `azure-devops` extension, logged in. Auto-merge is Azure DevOps' auto-complete. Descriptions over 4000 characters are cut. |
+
+For Azure DevOps:
+
+```json
+"pull_request": {
+  "APPROVE": ["sh \"$FACTORY_SCRIPTS/azure-devops/pull-request.sh\""],
+  "ESCALATE": ["sh \"$FACTORY_SCRIPTS/azure-devops/pull-request.sh\""]
+}
+```
+
+For any other host, write your own commands or script. They run in order in the job's worktree, stop at the first failure (logged in `<job folder>/pr.md`), and can read `$FACTORY_ID`, `$FACTORY_TITLE`, `$FACTORY_BRANCH`, `$FACTORY_BASE`, `$FACTORY_WORKTREE`, `$FACTORY_OUTCOME`, `$FACTORY_BODY_FILE` and `$FACTORY_SCRIPTS` (details in `<job.js> help`). Always quote them: the title comes from a user prompt.
+
 ## Spawning agents
 
 Spawn every agent as a subagent in the background. Start the subagent with model
 defined in `config.json -> agents` and use the relevant `references/agents/<agent>.md` file in the prompt.
-Each agent writes it's own markdown file with frontmatter. Use `node <factory>/scripts/job.js info <filename_without_extension>` to read frontmatter.
+Each agent writes it's own markdown file with frontmatter. Use the step's info command to read its frontmatter, e.g. `<job.js> intake info --id <id>` or `<job.js> builder info --id <id> --round <N>`.
 
 Every agent file uses the same frontmatter fields:
 

@@ -9,9 +9,9 @@ file other than the ones specified below.
 
 Do the following process in order:
 
-1. Run `<job.js> spec-writer <id> start`
+1. Run `<job.js> spec-writer start --id <id>`
 2. Write the spec by following the steps in [Spec](#spec)
-3. Run `<job.js> spec-writer <id> complete --content <file-path>` with the file from the previous step.
+3. Run `<job.js> spec-writer complete --id <id> --content <file-path>` with the file from the previous step.
 
 ## Where you work
 
@@ -47,7 +47,7 @@ under the worktree.
   helper, a doc convention), name it in Context and require it.
 - Include the doc updates the change needs (AGENTS.md and any docs it lists) as
   requirements.
-- `<job.js> gate <id> check --round <N>` runs the repo's tests, lint and build
+- `<job.js> gate check --id <id> --round <N>` runs the repo's tests, lint and build
   on every round, so don't restate it as a criterion. Ask for new tests where
   the repo has a test runner and the behavior can be tested.
 

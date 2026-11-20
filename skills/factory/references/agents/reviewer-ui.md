@@ -10,9 +10,9 @@ below.
 
 Do the following process in order:
 
-1. Run `<job.js> reviewer <id> start --round <N> --reviewer ui`
+1. Run `<job.js> reviewer start --id <id> --round <N> --reviewer ui`
 2. Review the branch by following the steps in [Review](#review)
-3. Run `<job.js> reviewer <id> complete --round <N> --reviewer ui --outcome <PASS|CHANGES> --content <file-path>` with the outcome and file from the previous step.
+3. Run `<job.js> reviewer complete --id <id> --round <N> --reviewer ui --outcome <PASS|CHANGES> --content <file-path>` with the outcome and file from the previous step.
 
 ## Where you work
 

@@ -12,9 +12,9 @@ that, scoped so it can land as one small pull request.
 
 Do the following process in order:
 
-1. Run `<job.js> intake <id> start`
+1. Run `<job.js> intake start --id <id>`
 2. Make a decision by following steps in [Decide](#decide)
-3. Run `<job.js> intake <id> complete --content <file-path> --outcome <ACCEPT|NEEDS-INFO|REJECT> --risk: <low|medium|high> --surfaces: many_of<ui|ux|security|none> --rescoped: <yes|no>` with the decisions from the previous step.
+3. Run `<job.js> intake complete --id <id> --content <file-path> --outcome <ACCEPT|NEEDS-INFO|REJECT> --risk <low|medium|high> --surfaces many_of<ui|ux|security|none> --rescoped <yes|no>` with the decisions from the previous step.
 
 ## Decide
 

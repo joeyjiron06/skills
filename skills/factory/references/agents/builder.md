@@ -10,9 +10,9 @@ than the ones specified below.
 
 Do the following process in order:
 
-1. Run `<job.js> builder <id> start --round <N>`
+1. Run `<job.js> builder start --id <id> --round <N>`
 2. Build the spec by following the steps in [Build](#build)
-3. Run `<job.js> builder <id> complete --round <N> --outcome <READY|BLOCKED> --content <file-path>` with the outcome and file from the previous step.
+3. Run `<job.js> builder complete --id <id> --round <N> --outcome <READY|BLOCKED> --content <file-path>` with the outcome and file from the previous step.
 
 ## Where you work
 
@@ -55,7 +55,7 @@ to the user and to other jobs.
 
 ### Test
 
-Run `<job.js> gate <id> check --round <N>`. It must pass: the orchestrator runs
+Run `<job.js> gate check --id <id> --round <N>`. It must pass: the orchestrator runs
 exactly this after you finish, and reviewers only start once it passes.
 
 Then verify every acceptance criterion and record the evidence: the command you

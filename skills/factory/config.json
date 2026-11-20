@@ -14,5 +14,13 @@
   },
   "gate": [
     "echo \"config.json -> gate has no checks yet. Add this repo's test, lint, typecheck and build commands.\" >&2 && exit 1"
-  ]
+  ],
+  "pull_request": {
+    "APPROVE": [
+      "sh \"$FACTORY_SCRIPTS/github/pull-request.sh\""
+    ],
+    "ESCALATE": [
+      "sh \"$FACTORY_SCRIPTS/github/pull-request.sh\""
+    ]
+  }
 }

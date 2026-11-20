@@ -18,17 +18,19 @@ Only run `<job.js> help` if you get stuck and need help with the script.
 <factory>/jobs/<job-id>/round-<N>/review-security.md security reviewer's comments for round N
 <factory>/jobs/<job-id>/round-<N>/feedback.md      the user's feedback on an escalated job in round N
 <factory>/jobs/<job-id>/decision.md
+<factory>/jobs/<job-id>/pr.md                      the logs of the commands that opened the pull request
 <repo>/.worktrees/<job-id>/                    the job's worktree, on factory/<job-id>
 ```
 
 ## 0. Create Job
 
-- Run `<job.js> create --prompt "<user_prompt>"` and remember it's job id in your context for later steps.
+- Write a short title for the job: one line, in the imperative, under ~70 characters (e.g. "Add a dark mode toggle to settings"). It becomes the pull request title.
+- Run `<job.js> create --title "<title>" --prompt "<user_prompt>"` and remember it's job id in your context for later steps.
 
 ## 1. Intake
 
 - Spawn `<agents>/intake.md` as a subagent with `<header>`
-- Run `<job.js> intake <id> info` and read it's decision and do the following based on it's status:
+- Run `<job.js> intake info --id <id>` and read it's decision and do the following based on it's status:
   - **ACCEPT**: Go to step **Spec**.
   - **NEEDS-INFO**: The job parks until the author replies.
   - **REJECT**: The job is rejected
@@ -39,26 +41,29 @@ Only run `<job.js> help` if you get stuck and need help with the script.
 
 ## 3. Build
 
-- Spawn `<agents>/builder.md` agent with `<header> Build round <N>.`. When it returns, call `<job.js> builder <id> info --round <N>` and do the following based on the status:
+- Spawn `<agents>/builder.md` agent with `<header> Build round <N>.`. When it returns, call `<job.js> builder info --id <id> --round <N>` and do the following based on the status:
   - `OUTCOME: READY`: Go to **Gate**.
   - `OUTCOME: BLOCKED`: This has been escalated to a human.
 
 ## 4. Gate
 
-- Run `<job.js> gate <id> check --round <N>`. When it returns, call `<job.js> gate <id> info --round <N>`. Its `OUTCOME` is `PASS` or `FAIL`.
+- Run `<job.js> gate check --id <id> --round <N>`. When it returns, call `<job.js> gate info --id <id> --round <N>`. Its `OUTCOME` is `PASS` or `FAIL`.
   - PASS: Go to **Review**.
   - FAIL: Retry build step for the next round. No reviewer runs on a failing build.
 
 ## 5. Review
 
-- Run `<job.js> intake <id> info` to find which reviewers are needed for this job
+- Run `<job.js> intake info --id <id>` to find which reviewers are needed for this job
 - Spawn every reviewer as a subagent with `<header>`, so they run in parallel: `reviewer-<r>.md` launched with the model defined in `<factory>/config.json` with prompt `<header> Review round <N>.` plus the port for `ux` and
   `ui`. **WAIT FOR ALL agents to finish before moving onto the next step.**
-- Run `<job.js> reviewer <id> info --round <N> --reviewer ALL` to get the verdicts of all the reviewers
+- Run `<job.js> reviewer info --id <id> --round <N> --reviewer ALL` to get the verdicts of all the reviewers
 - If all PASS then go to **Approver**
 - If any CHANGES are needed, go back to the build step.
 
 ## 6. Approver
 
-- Spawn `<agents>/approver.md` with `<header>`
-- Run `<job.js> complete` to complete the job
+- Spawn `<agents>/approver.md` with `<header>`. When it returns, call `<job.js> approver info --id <id>`. Its `OUTCOME` is `APPROVE` or `ESCALATE`.
+- `approver complete` opened the pull request on GitHub or Azure DevOps by running `config.json -> pull_request.<OUTCOME>` (see Pull requests in `SKILL.md`), and logged it to `<job folder>/pr.md`; the PR's URL is the last log line. Give the user the link:
+  - **APPROVE**: the PR is labelled `auto-merge` and set to merge on its own. Tell the user the PR is in.
+  - **ESCALATE**: the PR is labelled `needs-human-review`. Tell the user what the approver needs from them (the `For the human` section of `decision.md`).
+- If `decision.md` is still `RUNNING` and `pr.md` says `OUTCOME: FAIL`, the pull request failed: tell the user which command failed and why.
