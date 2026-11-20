@@ -1,0 +1,18 @@
+{
+  "concurrency": 3,
+  "max_rounds": 3,
+  "base_branch": "main",
+  "agents": {
+    "intake": "claude-fable",
+    "spec-writer": "claude-opus",
+    "builder": "claude-opus",
+    "approver": "claude-opus",
+    "reviewer-ui": "claude-hauki",
+    "reviewer-ux": "claude-sonnet",
+    "reviewer-code": "claude-opus",
+    "reviewer-security": "claude-opus"
+  },
+  "gate": [
+    "echo \"config.json -> gate has no checks yet. Add this repo's test, lint, typecheck and build commands.\" >&2 && exit 1"
+  ]
+}
