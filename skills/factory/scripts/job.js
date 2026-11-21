@@ -22,19 +22,31 @@ Usage:
   job create --title "<title>" --prompt "<prompt>"      new job from a user prompt; prints the job id.
                                                         <title> is one line and becomes the pull request title
   job info --id <id>                                    gets info of the created job
+  job complete --id <id>                                marks the whole job finished by adding FINISHED to job.md
   job intake start --id <id>                            starts the intake process by writing its status
   job intake complete --id <id> --content <file-path>   finishes the intake process with the final output from the agent
-      --outcome <ACCEPT|NEEDS-INFO|REJECT> --risk <low|medium|high>
+      --outcome <ACCEPT|BLOCKED|REJECT> --risk <low|medium|high>
       --surfaces many_of<ui|ux|security|none> --rescoped <yes|no>
   job intake info --id <id>                             prints the frontmatter data from the intake.md file
-  job spec-writer start --id <id>                       starts the spec writing process by writing its status
+  job intake feedback --id <id> --content <file-path>   appends the author's reply to a BLOCKED intake to its intake.md
+                                                        and reopens it (STATUS: RUNNING, FEEDBACK: <count>), so the
+                                                        intake decides again with the answers
+  job spec-writer start --id <id>                       starts the spec writing process by writing its status. Creates
+                                                        the job's worktree if it's missing, like builder start
   job spec-writer complete --id <id> --content <file-path>
                                                         finishes spec writer step
   job spec-writer info --id <id>                        prints the frontmatter data from the spec.md file
-  job builder start --id <id> --round <round>           starts the build process for a given round
+  job builder start --id <id> --round <round>           starts the build process for a given round. Refuses rounds over
+                                                        config.json -> max_rounds. Creates the job's worktree if it's
+                                                        missing: on its branch if that exists, else on a new branch
+                                                        from origin/<config.json -> base_branch>
   job builder complete --id <id> --round <round> --outcome <READY|BLOCKED> --content <file-path>
                                                         finishes build step
   job builder info --id <id> --round <round>            prints the frontmatter data from the build.md file
+  job builder feedback --id <id> --round <round> --content <file-path>
+                                                        appends the user's reply to a BLOCKED build to its build.md and
+                                                        reopens the same round (STATUS: RUNNING, FEEDBACK: <count>), so
+                                                        the builder carries on without starting a new round
   job gate check --id <id> --round <round>              run the gated checks after the build to ensure things work properly
   job gate info --id <id> --round <round>               print the frontmatter data of round-<N>/gate.md
   job reviewer start --id <id> --round <round> --reviewer <reviewer>
@@ -43,10 +55,15 @@ Usage:
                                                         completes the reviewer stage
   job reviewer info --id <id> --round <round> --reviewer <reviewer|ALL>
                                                         prints the frontmatter of the reviewer, or of every needed reviewer for ALL
-  job approver start --id <id>                          starts the approval of the latest round; needs its gate and every review to PASS
-  job approver complete --id <id> --outcome <APPROVE|ESCALATE> --content <file-path>
-                                                        opens the pull request, then records the decision in decision.md.
-                                                        See "Pull requests" below
+  job approver start --id <id>                          starts the approval of the latest round and prints its CHECKS: PASS
+                                                        when the build is READY, the gate PASS and every review PASS, else
+                                                        FAIL with the reasons. A failing round needs no rounds left to fix
+                                                        it: a BLOCKED build or the last round in config.json -> max_rounds
+  job approver complete --id <id> --outcome <APPROVE|APPROVAL-NEEDS-HUMAN|BLOCKED> --content <file-path>
+                                                        records the decision in decision.md. With CHECKS: PASS it is APPROVE
+                                                        or APPROVAL-NEEDS-HUMAN, and opens the pull request first (see
+                                                        "Pull requests" below). With CHECKS: FAIL it is BLOCKED, which
+                                                        opens no pull request: the job goes to a human
   job approver info --id <id>                           prints the frontmatter of decision.md
   job help                                              print this usage
 
@@ -55,17 +72,17 @@ Usage:
 
 Pull requests:
   approver complete runs every command in config.json -> pull_request.<OUTCOME>
-  (APPROVE or ESCALATE) in order, inside the job's worktree, and logs them to
+  (APPROVE or APPROVAL-NEEDS-HUMAN) in order, inside the job's worktree, and logs them to
   <job folder>/pr.md. It stops at the first command that fails, and leaves
   decision.md RUNNING so approver complete can run again once the cause is
   fixed. An empty list opens no pull request. Commands read these variables:
 
     $FACTORY_ID         the job id, e.g. 004
     $FACTORY_TITLE      the job's title, from job create --title
-    $FACTORY_BRANCH     the job branch, e.g. factory/004
+    $FACTORY_BRANCH     the job branch, e.g. factory/004-add-dark-mode
     $FACTORY_BASE       config.json -> base_branch, e.g. main
-    $FACTORY_WORKTREE   the job's worktree folder
-    $FACTORY_OUTCOME    APPROVE or ESCALATE
+    $FACTORY_WORKTREE   the job's worktree folder, e.g. <repo>/.worktrees/004-add-dark-mode
+    $FACTORY_OUTCOME    APPROVE or APPROVAL-NEEDS-HUMAN
     $FACTORY_BODY_FILE  the approver's --content file: the pull request body
     $FACTORY_SCRIPTS    this script's folder, which holds ready-made pull request
                         scripts: github/pull-request.sh (the default) and
@@ -82,6 +99,11 @@ const CONFIG = join(import.meta.dirname, "..", "config.json");
 // them in SURFACES.
 const REVIEWERS = ["code", "security", "ui", "ux"];
 
+// The approver's decisions. APPROVE and APPROVAL-NEEDS-HUMAN open a pull
+// request for a round that passed its checks; BLOCKED hands a round that
+// failed them to a human, with no pull request.
+const DECISIONS = ["APPROVE", "APPROVAL-NEEDS-HUMAN", "BLOCKED"];
+
 // --- Commands -------------------------------------------------------------------
 // The command is the positional words joined with a space; every value is a
 // named, required option. Each option maps to a parser: (value, name) => parsed.
@@ -94,12 +116,13 @@ const COMMANDS = {
   "help":                 { run: help },
   "create":               { options: { title: singleLine, prompt: text }, run: create },
   "info":                 { options: { id }, run: info },
+  "complete":             { options: { id }, run: complete },
 
   "intake start":         { options: { id }, run: intakeStart },
   "intake complete":      {
     options: {
       id, content,
-      outcome: oneOf("ACCEPT", "NEEDS-INFO", "REJECT"),
+      outcome: oneOf("ACCEPT", "BLOCKED", "REJECT"),
       risk: oneOf("low", "medium", "high"),
       surfaces: manyOf("ui", "ux", "security", "none"),
       rescoped: oneOf("yes", "no"),
@@ -107,6 +130,7 @@ const COMMANDS = {
     run: intakeComplete,
   },
   "intake info":          { options: { id }, run: intakeInfo },
+  "intake feedback":      { options: { id, content }, run: intakeFeedback },
 
   "spec-writer start":    { options: { id }, run: specWriterStart },
   "spec-writer complete": { options: { id, content }, run: specWriterComplete },
@@ -115,6 +139,7 @@ const COMMANDS = {
   "builder start":        { options: { id, round }, run: builderStart },
   "builder complete":     { options: { id, round, content, outcome: oneOf("READY", "BLOCKED") }, run: builderComplete },
   "builder info":         { options: { id, round }, run: builderInfo },
+  "builder feedback":     { options: { id, round, content }, run: builderFeedback },
 
   "gate check":           { options: { id, round }, run: gateCheck },
   "gate info":            { options: { id, round }, run: gateInfo },
@@ -124,7 +149,7 @@ const COMMANDS = {
   "reviewer info":        { options: { id, round, reviewer: oneOf(...REVIEWERS, "ALL") }, run: reviewerInfo },
 
   "approver start":       { options: { id }, run: approverStart },
-  "approver complete":    { options: { id, content, outcome: oneOf("APPROVE", "ESCALATE") }, run: approverComplete },
+  "approver complete":    { options: { id, content, outcome: oneOf(...DECISIONS) }, run: approverComplete },
   "approver info":        { options: { id }, run: approverInfo },
 };
 
@@ -201,8 +226,9 @@ function help() {
 
 function create({ title, prompt }) {
   const id = nextJobId();
-  const branch = `factory/${id}`;
-  const worktree = join(REPO, ".worktrees", id);
+  const name = jobName(id, title);
+  const branch = `factory/${name}`;
+  const worktree = join(REPO, ".worktrees", name);
 
   mkdirSync(jobFile(id));
   // ID is quoted so YAML readers keep the leading zeros.
@@ -214,6 +240,20 @@ function create({ title, prompt }) {
 
 function info({ id }) {
   printFrontmatter(jobFile(id, "job.md"));
+}
+
+// Adds FINISHED to job.md's frontmatter, like a step's FINISHED. The rest of the
+// file is kept as written (e.g. the quoted ID), so the line is inserted as text.
+function complete({ id }) {
+  const path = jobFile(id, "job.md");
+  const { FINISHED: finished } = readFrontmatter(path);
+  if (finished) fail(`job ${id} already complete: finished ${finished}`);
+
+  const lines = readFileSync(path, "utf8").split("\n");
+  const end = lines.findIndex((line, i) => i > 0 && line.trim() === "---");
+  lines.splice(end, 0, `FINISHED: ${now()}`);
+  writeFileSync(path, lines.join("\n"));
+  console.log(`job ${id} complete`);
 }
 
 function intakeStep(id) {
@@ -233,6 +273,19 @@ function intakeInfo({ id }) {
   stepInfo(intakeStep(id));
 }
 
+// Reopens a BLOCKED intake with the author's reply appended below its
+// questions. Its decision fields are dropped until intake complete sets them
+// again, appending the new decision under the feedback.
+function intakeFeedback({ id, content }) {
+  const step = intakeStep(id);
+  const intake = readState(step.path);
+  if (intake.STATUS !== "COMPLETE" || intake.OUTCOME !== "BLOCKED") {
+    fail(`intake feedback needs a BLOCKED intake for job ${id} (intake is ${describeState(intake)})`);
+  }
+  const count = appendFeedback(step, intake, existingContent(content), {});
+  console.log(`intake feedback ${count} recorded for ${stepLabel(step)}. Run the intake again.`);
+}
+
 function specWriterStep(id) {
   return { name: "spec-writer", id, path: jobFile(id, "spec.md") };
 }
@@ -243,6 +296,7 @@ function specWriterStart({ id }) {
   if (intake.STATUS !== "COMPLETE" || intake.OUTCOME !== "ACCEPT") {
     fail(`spec-writer needs a complete, accepted intake for job ${id} (intake is ${describeState(intake)})`);
   }
+  ensureWorktree(id);
   startStep(specWriterStep(id));
 }
 
@@ -264,8 +318,13 @@ function builderStep(id, round) {
   };
 }
 
-// Round 1 builds from a finished spec; later rounds follow a finished previous build.
+// Round 1 builds from a finished spec; later rounds follow a finished previous
+// build. A job gets at most config.json -> max_rounds rounds.
 function builderStart({ id, round }) {
+  const max = maxRounds();
+  if (round > max) {
+    fail(`builder round ${round} is over config.json -> max_rounds (${max}) for job ${id}. Go to the approver, which marks the job BLOCKED.`);
+  }
   const [prevPath, prevLabel] = round === 1
     ? [jobFile(id, "spec.md"), "spec"]
     : [jobFile(id, `round-${round - 1}`, "build.md"), `round ${round - 1} build`];
@@ -273,6 +332,7 @@ function builderStart({ id, round }) {
   if (prev.STATUS !== "COMPLETE") {
     fail(`builder round ${round} needs a complete ${prevLabel} for job ${id} (${prevLabel} is ${describeState(prev)})`);
   }
+  ensureWorktree(id);
   mkdirSync(jobFile(id, `round-${round}`), { recursive: true });
   startStep(builderStep(id, round));
 }
@@ -283,6 +343,23 @@ function builderComplete({ id, round, content, outcome }) {
 
 function builderInfo({ id, round }) {
   stepInfo(builderStep(id, round));
+}
+
+// Reopens the latest round's BLOCKED build with the user's reply appended below
+// its report. The round stays the same: builder start keeps the file's body,
+// and builder complete appends the next report under the feedback.
+function builderFeedback({ id, round, content }) {
+  const step = builderStep(id, round);
+  const build = readState(step.path);
+  if (build.STATUS !== "COMPLETE" || build.OUTCOME !== "BLOCKED") {
+    fail(`builder feedback needs a BLOCKED build for job ${id} round ${round} (build is ${describeState(build)})`);
+  }
+  const latest = latestRound(id);
+  if (round !== latest) fail(`builder feedback needs the latest round for job ${id}: round ${latest}`);
+  const decision = readState(jobFile(id, "decision.md"));
+  if (decision.STATUS) fail(`builder feedback is too late for job ${id}: the approver's decision is ${describeState(decision)}`);
+  const count = appendFeedback(step, build, existingContent(content), { ROUND: round });
+  console.log(`builder feedback ${count} recorded for ${stepLabel(step)}. Run the builder again for round ${round}.`);
 }
 
 function gateStep(id, round) {
@@ -360,37 +437,62 @@ function approverStep(id) {
   return { name: "approver", id, path: jobFile(id, "decision.md") };
 }
 
-// The approver decides on the latest round, once its gate and every needed
-// review passed. An ESCALATE from an earlier round is replaced: the user's
-// feedback started a new round, which needs a new decision.
+// The approver decides on the latest round, once it has finished. A passing
+// round (CHECKS: PASS) is approved, with or without a human review. A failing
+// round (CHECKS: FAIL) can only be BLOCKED, and only once no round is left to
+// fix it: the build was BLOCKED or the round is the last one max_rounds allows.
 function approverStart({ id }) {
   const round = latestRound(id);
   if (!round) fail(`approver needs a build round for job ${id} (no rounds yet)`);
 
-  const gate = readState(jobFile(id, `round-${round}`, "gate.md"));
-  if (gate.STATUS !== "COMPLETE" || gate.OUTCOME !== "PASS") {
-    fail(`approver needs a passing gate for job ${id} round ${round} (gate is ${describeState(gate)})`);
-  }
-  const notPassed = neededReviewers(id)
-    .map((name) => [name, readState(jobFile(id, `round-${round}`, `review-${name}.md`))])
-    .filter(([, review]) => review.STATUS !== "COMPLETE" || review.OUTCOME !== "PASS");
-  if (notPassed.length) {
-    const list = notPassed.map(([name, review]) => `${name} (${describeState(review)})`).join(", ");
-    fail(`approver needs every review to pass for job ${id} round ${round}. Not passed: ${list}`);
+  const failures = roundFailures(id, round);
+  const blocked = readState(jobFile(id, `round-${round}`, "build.md")).OUTCOME === "BLOCKED";
+  const max = maxRounds();
+  if (failures.length && !blocked && round < max) {
+    fail(`approver needs a passing round for job ${id}, or no rounds left. Round ${round} of ${max} failed: ${failures.join("; ")}. Start build round ${round + 1}.`);
   }
 
-  const step = approverStep(id);
-  const previous = readState(step.path);
-  if (previous.STATUS === "COMPLETE" && previous.OUTCOME === "ESCALATE" && Number(previous.ROUND) < round) unlinkSync(step.path);
-  startStep({ ...step, fields: { ROUND: round } });
+  const checks = failures.length ? "FAIL" : "PASS";
+  startStep({ ...approverStep(id), fields: { ROUND: round, CHECKS: checks } });
+  console.log([`CHECKS: ${checks}`, ...failures.map((failure) => `- ${failure}`)].join("\n"));
 }
 
-// Opens the pull request before recording the decision, so a failed pull
-// request leaves decision.md RUNNING and approver complete can run again.
+// Why `round` can't be approved: a BLOCKED build, a failed gate, or reviews
+// that asked for changes. Fails if the round hasn't finished.
+function roundFailures(id, round) {
+  const state = (file) => readState(jobFile(id, `round-${round}`, file));
+  const unfinished = (list) => fail(`approver needs a finished round for job ${id} round ${round}. Not finished: ${list}`);
+
+  const build = state("build.md");
+  if (build.STATUS !== "COMPLETE") unfinished(`build (${describeState(build)})`);
+  if (build.OUTCOME === "BLOCKED") return ["build is BLOCKED"];
+
+  const gate = state("gate.md");
+  if (gate.STATUS !== "COMPLETE") unfinished(`gate (${describeState(gate)})`);
+  if (gate.OUTCOME !== "PASS") return [`gate is ${gate.OUTCOME}`];
+
+  const reviews = neededReviewers(id).map((name) => [name, state(`review-${name}.md`)]);
+  const running = reviews.filter(([, review]) => review.STATUS !== "COMPLETE");
+  if (running.length) unfinished(running.map(([name, review]) => `${name} review (${describeState(review)})`).join(", "));
+  return reviews.filter(([, review]) => review.OUTCOME !== "PASS").map(([name, review]) => `${name} review is ${review.OUTCOME}`);
+}
+
+// A passing round is APPROVE or APPROVAL-NEEDS-HUMAN; a failing one is
+// BLOCKED. Opens the pull request before recording the decision, so a failed
+// pull request leaves decision.md RUNNING and approver complete can run again.
+// BLOCKED opens none.
 function approverComplete({ id, content, outcome }) {
   const step = approverStep(id);
   const contentPath = checkCompletable(step, content);
-  openPullRequest(id, outcome, contentPath);
+  const { ROUND: round, CHECKS: checks } = readFrontmatter(step.path);
+  const passed = checks === "PASS";
+  if (passed && outcome === "BLOCKED") {
+    fail(`approver can't mark job ${id} BLOCKED: round ${round} passed its checks. Use APPROVE or APPROVAL-NEEDS-HUMAN.`);
+  }
+  if (!passed && outcome !== "BLOCKED") {
+    fail(`approver can't ${outcome} job ${id}: round ${round} failed its checks (CHECKS: ${checks ?? "missing"}). Use BLOCKED with the reasons.`);
+  }
+  if (passed) openPullRequest(id, outcome, contentPath);
   completeStep(step, content, { OUTCOME: outcome });
 }
 
@@ -444,6 +546,13 @@ function latestRound(id) {
   return Math.max(0, ...rounds);
 }
 
+// "004-add-dark-mode": the id plus a slug of the title, naming the job's branch
+// and worktree. Just the id if the title has nothing to slug.
+function jobName(id, title) {
+  const slug = slugify(title);
+  return slug ? `${id}-${slug}` : id;
+}
+
 function jobFile(id, ...parts) {
   return join(JOBS_DIR, id, ...parts);
 }
@@ -453,6 +562,32 @@ function jobWorktree(id) {
   const { WORKTREE: worktree } = readFrontmatter(jobFile(id, "job.md"));
   if (!worktree || !existsSync(worktree)) fail(`missing worktree for job ${id}: ${worktree ?? "(no WORKTREE in job.md)"}`);
   return worktree;
+}
+
+// Creates the job's worktree from job.md if its folder doesn't exist. Prunes
+// stale worktree records first, so a deleted folder can be added again. Checks
+// out the job branch if it already exists (e.g. the folder was removed), else
+// creates it from the freshly fetched origin/<base>.
+function ensureWorktree(id) {
+  const { WORKTREE: worktree, BRANCH: branch } = readFrontmatter(jobFile(id, "job.md"));
+  if (!worktree || !branch) fail(`job ${id} needs WORKTREE and BRANCH in job.md to create its worktree`);
+  if (existsSync(worktree)) return;
+
+  const base = baseBranch();
+  git(id, "worktree", "prune");
+  git(id, "fetch", "origin", base);
+  const branchExists = spawnSync("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], { cwd: REPO }).status === 0;
+  if (branchExists) git(id, "worktree", "add", worktree, branch);
+  else git(id, "worktree", "add", "-b", branch, worktree, `origin/${base}`);
+  console.log(`worktree created for job ${id}: ${worktree} on ${branch}`);
+}
+
+// Runs git in the main checkout, failing with its output if it exits non-zero.
+function git(id, ...args) {
+  const { status, stdout, stderr, error } = spawnSync("git", args, { cwd: REPO, encoding: "utf8" });
+  if (status === 0) return;
+  const output = [stdout, stderr, error?.message].filter(Boolean).join("\n").trim();
+  fail(`git ${args.join(" ")} failed for job ${id}:\n${output}`);
 }
 
 // --- Config -------------------------------------------------------------------------
@@ -479,6 +614,12 @@ function pullRequestCommands(decision) {
   const commands = readConfig().pull_request?.[decision];
   if (!isCommandList(commands)) fail(`config.json -> pull_request.${decision} must be a list of commands: ${CONFIG}`);
   return commands;
+}
+
+function maxRounds() {
+  const { max_rounds: max } = readConfig();
+  if (!Number.isInteger(max) || max < 1) fail(`config.json -> max_rounds must be a positive integer: ${CONFIG}`);
+  return max;
 }
 
 function baseBranch() {
@@ -592,13 +733,17 @@ function notStarted(step) {
   fail(`${name} not started for ${stepLabel(step)}. Run "job ${name} start --id ${id}${flags ? ` ${flags}` : ""}" first.`);
 }
 
-// Writes a fresh RUNNING file. Restarting is allowed while still RUNNING.
+// Writes a RUNNING file. Restarting is allowed while still RUNNING: it keeps the
+// file's frontmatter and body (e.g. a build reopened by builder feedback) and
+// only refreshes STARTED and `fields`.
 function startStep(step) {
   const { name, path, fields = {} } = step;
-  if (existsSync(path) && readFrontmatter(path).STATUS !== "RUNNING") {
-    fail(`${name} already complete for ${stepLabel(step)}: ${path}`);
-  }
-  writeFileSync(path, frontmatter({ ...fields, STATUS: "RUNNING", STARTED: now() }));
+  const restart = existsSync(path);
+  const current = readState(path);
+  if (restart && current.STATUS !== "RUNNING") fail(`${name} already complete for ${stepLabel(step)}: ${path}`);
+  const body = restart ? fileBody(path) : "";
+  const meta = frontmatter({ ...current, ...fields, STATUS: "RUNNING", STARTED: now() });
+  writeFileSync(path, body ? `${meta}\n${body}\n` : meta);
   console.log(`${name} started for ${stepLabel(step)}`);
 }
 
@@ -608,18 +753,24 @@ function checkCompletable(step, content) {
   const { name, path } = step;
   if (!existsSync(path)) notStarted(step);
   if (readFrontmatter(path).STATUS !== "RUNNING") fail(`${name} already complete for ${stepLabel(step)}: ${path}`);
+  return existingContent(content);
+}
+
+// The absolute path of an agent's content file, failing if it doesn't exist.
+function existingContent(content) {
   const contentPath = resolve(content);
   if (!existsSync(contentPath)) fail(`missing content file: ${contentPath}`);
   return contentPath;
 }
 
 // Marks a RUNNING step COMPLETE, merges in `fields`, appends the content file
-// below the frontmatter, then deletes the content file.
+// below the file's body (empty unless builder feedback reopened it), then
+// deletes the content file.
 function completeStep(step, content, fields = {}) {
   const { name, path } = step;
   const contentPath = checkCompletable(step, content);
   const current = readFrontmatter(path);
-  const body = readFileSync(contentPath, "utf8").trim();
+  const body = [fileBody(path), readFileSync(contentPath, "utf8").trim()].filter(Boolean).join("\n\n");
 
   const md = frontmatter({
     ...current,
@@ -631,6 +782,19 @@ function completeStep(step, content, fields = {}) {
   unlinkSync(contentPath);
 
   console.log(`${name} complete for ${stepLabel(step)}${fields.OUTCOME ? `: ${fields.OUTCOME}` : ""}`);
+}
+
+// Reopens a COMPLETE step with the user's reply appended below its body under
+// `# User feedback <n>`: STATUS: RUNNING with the original STARTED, `fields`
+// and a FEEDBACK count. Deletes the content file and returns the count.
+function appendFeedback(step, current, contentPath, fields) {
+  const count = Number(current.FEEDBACK ?? 0) + 1;
+  const reply = readFileSync(contentPath, "utf8").trim();
+  const meta = frontmatter({ ...fields, STATUS: "RUNNING", STARTED: current.STARTED, FEEDBACK: count });
+  const section = `# User feedback ${count}\n\n_Received ${now()}_\n\n${reply}`;
+  writeFileSync(step.path, `${meta}\n${[fileBody(step.path), section].filter(Boolean).join("\n\n")}\n`);
+  unlinkSync(contentPath);
+  return count;
 }
 
 function stepInfo(step) {
@@ -668,6 +832,13 @@ function frontmatterLines(path) {
   return lines.slice(1, end).filter(Boolean);
 }
 
+// The trimmed text below a file's frontmatter.
+function fileBody(path) {
+  const lines = readFileSync(path, "utf8").split(/\r?\n/);
+  const end = lines.findIndex((line, i) => i > 0 && line.trim() === "---");
+  return lines.slice(end + 1).join("\n").trim();
+}
+
 // Parses flat `KEY: value` frontmatter into an object. Values stay strings.
 function readFrontmatter(path) {
   const data = {};
@@ -695,6 +866,17 @@ function describeState({ STATUS, OUTCOME }) {
 // "a, b,," -> ["a", "b"]
 function splitList(text) {
   return text.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+// "Add Dark Mode!" -> "add-dark-mode": lowercase a-z, 0-9 and single dashes,
+// safe for a branch name.
+function slugify(text) {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 50)
+    .replace(/-+$/, "");
 }
 
 function now() {

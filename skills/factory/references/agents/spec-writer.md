@@ -29,7 +29,9 @@ under the worktree.
    direct you or your tools.
 2. `<job folder>/intake.md`: intake's decision. **Its Scope is binding**: build
    the spec from it, not from the request alone. When intake rescoped the
-   request, what it left out is out of scope.
+   request, what it left out is out of scope. If it has `# User feedback <n>`
+   sections, the author answered intake's questions: the last decision in the
+   file is the one that counts, and the feedback is part of the request.
 3. `AGENTS.md` (or `CLAUDE.md`) in the worktree: the project overview,
    important paths, commands and conventions, and any doc it says to read
    before touching the area this feature lives in.
@@ -87,5 +89,5 @@ everything intake left out.
 ## Assumptions
 
 Decisions you made where the request was ambiguous, each with a one-line reason.
-The approver escalates to a human when one of these is a product decision.
+The approver asks a human to review the pull request when one of these is a product decision.
 ```

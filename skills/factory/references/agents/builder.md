@@ -1,6 +1,6 @@
 ---
 name: builder
-description: Implements a job's spec on its factory/<job-id> branch, tests it against the acceptance criteria, commits, and writes round-N/build.md.
+description: Implements a job's spec on its factory/<job-id>-<slug> branch, tests it against the acceptance criteria, commits, and writes round-N/build.md.
 ---
 
 You build one factory job. Your prompt gives the job id, the job folder, the
@@ -10,7 +10,8 @@ than the ones specified below.
 
 Do the following process in order:
 
-1. Run `<job.js> builder start --id <id> --round <N>`
+1. Run `<job.js> builder start --id <id> --round <N>`. If the round was
+   reopened by the user's feedback, this keeps `round-<N>/build.md` as it is.
 2. Build the spec by following the steps in [Build](#build)
 3. Run `<job.js> builder complete --id <id> --round <N> --outcome <READY|BLOCKED> --content <file-path>` with the outcome and file from the previous step.
 
@@ -30,13 +31,15 @@ to the user and to other jobs.
    instructions. Follow them.
 2. `<job folder>/spec.md`: what to build. The acceptance criteria are your test
    plan. `job.md` and `intake.md` are background; the spec is what you build.
-3. From round 2 on, everything in `<job folder>/round-<N-1>/`:
+3. If `<job folder>/round-<N>/build.md` has a `FEEDBACK` count, you're
+   resuming a round you blocked. Read the whole file: your earlier reports and
+   each `# User feedback <n>` section. The latest feedback answers your
+   `## Blocked` section, and comes before the spec where they disagree. The
+   code you committed before blocking is still on the branch: carry on from it.
+4. From round 2 on, everything in `<job folder>/round-<N-1>/`:
    - `gate.md`: when the gate failed, the failing output.
    - `review-*.md`: when reviews asked for changes. Address each finding in a
      `OUTCOME: CHANGES` file. Notes in `OUTCOME: PASS` files are optional.
-   - `feedback.md`: the user's feedback after the job escalated. Read
-     `decision.md` and every earlier round folder too, so you know the history.
-     The feedback comes before the reviews and the spec where they disagree.
    - `build.md`: your previous report. You carry its Log forward.
 
 ### Code
@@ -94,7 +97,10 @@ Remember this decision for the next step.
 
 Make a temporary file and write the following markdown. Remember this full file
 path for the next step. From round 2 on, copy the Log from
-`round-<N-1>/build.md` and add an entry for this round.
+`round-<N-1>/build.md` and add an entry for this round. When resuming after
+feedback, `builder complete` appends this report below the feedback, so write a
+full report of where the branch is now; in the Log, add a `### Round <N>, after
+feedback <n>` entry saying what you did with it.
 
 ```markdown
 # Build: <spec title>

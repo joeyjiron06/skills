@@ -4,11 +4,13 @@
 # Run by `job approver complete` through config.json -> pull_request, inside the
 # job's worktree, with the $FACTORY_* variables set (see `job help`):
 #
-#   APPROVE   labels the PR auto-merge and turns on auto-merge (squash)
-#   ESCALATE  labels the PR needs-human-review
+#   APPROVE               labels the PR auto-merge and turns on auto-merge (squash)
+#   APPROVAL-NEEDS-HUMAN  labels the PR needs-human-review
+#
+# (A BLOCKED decision opens no pull request, so this never runs for one.)
 #
 # Safe to run again: an existing PR for the branch is updated, not duplicated,
-# and its label is swapped when an ESCALATE is followed by an APPROVE.
+# and the other outcome's label is removed.
 #
 # Needs: gh, logged in (`gh auth status`) with access to the repo. Auto-merge
 # also needs "Allow auto-merge" on in the repo's settings.
@@ -21,14 +23,14 @@ case "$FACTORY_OUTCOME" in
     color=0E8A16
     about="The factory approved this PR to merge without human review"
     ;;
-  ESCALATE)
+  APPROVAL-NEEDS-HUMAN)
     label=needs-human-review
     other=auto-merge
     color=D93F0B
     about="The factory needs a human to review this PR"
     ;;
   *)
-    echo "unknown FACTORY_OUTCOME: $FACTORY_OUTCOME (expected APPROVE or ESCALATE)" >&2
+    echo "unknown FACTORY_OUTCOME: $FACTORY_OUTCOME (expected APPROVE or APPROVAL-NEEDS-HUMAN)" >&2
     exit 1
     ;;
 esac

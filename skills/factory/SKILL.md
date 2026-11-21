@@ -24,7 +24,7 @@ File references are relative to this current markdown file, e.g. scripts/job.js 
 Here are some definitions to folders referenced in the docs below.
 
 - `<repo>` - the root repo, no work should be done here, all work should be done in worktree
-- `<worktree>` - located in `<repo>/.worktrees/<job_id>` which is a worktree for a specific job
+- `<worktree>` - located in `<repo>/.worktrees/<job_id>-<title-slug>` which is a worktree for a specific job (its exact path is `WORKTREE` in `job.md`)
 - `<factory>` - either `<repo>/<agent_harness>/skills/factory/` where `<agent_harness>` is one of: `.agents`, `.claude`, `.cursor`, `.github`, `.copilot` or other similar dot folder for where agents install skills
 - `<agents>` - alias for `<factory>/agents/`
 - `<jobs>` - alias for `<factory>/jobs/` where all the jobs live. each folder is a job id that is an incrementing 3 digit number
@@ -36,18 +36,20 @@ Here are some definitions to folders referenced in the docs below.
 
 `config.json` sets up the factory for this repo:
 
-- `concurrency`, `max_rounds`: how many jobs run at once, and how many build rounds a job gets.
+- `concurrency`, `max_rounds`: how many jobs run at once, and how many build rounds a job gets. `builder start` enforces `max_rounds`; a job that runs out of rounds goes to the approver, which marks it `BLOCKED`.
 - `base_branch`: the branch jobs start from and pull requests target.
 - `agents`: the model for each agent.
 - `gate`: shell commands that must all pass after every build (tests, lint, typecheck, build).
-- `pull_request.APPROVE` and `pull_request.ESCALATE`: shell commands `approver complete` runs in the job's worktree to open the pull request. Set a list to `[]` to open no PR. See [Pull requests](#pull-requests).
+- `pull_request.APPROVE` and `pull_request.APPROVAL-NEEDS-HUMAN`: shell commands `approver complete` runs in the job's worktree to open the pull request. Set a list to `[]` to open no PR. See [Pull requests](#pull-requests).
 
 ## Pull requests
 
-When the approver finishes, `approver complete` opens a pull request for the job, whatever the decision:
+When the approver finishes on a round that passed its checks, `approver complete` opens a pull request for the job:
 
 - **APPROVE**: labelled `auto-merge`, and set to merge on its own once the host's checks pass.
-- **ESCALATE**: labelled `needs-human-review`.
+- **APPROVAL-NEEDS-HUMAN**: labelled `needs-human-review`.
+
+A **BLOCKED** decision (a round that failed its checks) opens no pull request: the job goes to a human.
 
 The PR's title is the job's title (`job create --title`) and its description is the approver's decision. Running it again updates the same PR instead of opening a second one.
 
@@ -63,7 +65,7 @@ For Azure DevOps:
 ```json
 "pull_request": {
   "APPROVE": ["sh \"$FACTORY_SCRIPTS/azure-devops/pull-request.sh\""],
-  "ESCALATE": ["sh \"$FACTORY_SCRIPTS/azure-devops/pull-request.sh\""]
+  "APPROVAL-NEEDS-HUMAN": ["sh \"$FACTORY_SCRIPTS/azure-devops/pull-request.sh\""]
 }
 ```
 
@@ -96,6 +98,11 @@ Job: <id>. Job folder: <factory>/jobs/<id>/. Main checkout: <repo>. Worktree: <w
 ## `/factory build <prompt>`
 
 Read and run the pipeline defined in `references/pipelines/build.md`
+
+## `/factory <feedback on a job>`
+
+- When the user replies to a job whose intake is `BLOCKED`, follow **Intake feedback** in `references/pipelines/build.md`: by default, record the reply with `<job.js> intake feedback` and run the intake again.
+- When the user replies to a job whose build is `BLOCKED`, follow **Build feedback** in `references/pipelines/build.md`: by default, record the reply with `<job.js> builder feedback` and run the builder again on the same round.
 
 ## `/factory fix <prompt>`
 

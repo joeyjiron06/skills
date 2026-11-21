@@ -109,15 +109,15 @@ describe("github/pull-request.sh", () => {
     assert.ok(!existsSync(join(WORKTREE, "pwned")));
   });
 
-  test("ESCALATE with no PR: labels it needs-human-review and doesn't merge", () => {
-    const { code, calls } = run("github", "ESCALATE");
+  test("APPROVAL-NEEDS-HUMAN with no PR: labels it needs-human-review and doesn't merge", () => {
+    const { code, calls } = run("github", "APPROVAL-NEEDS-HUMAN");
     assert.equal(code, 0);
     assert.match(calls[1], /^gh \[label\] \[create\] \[needs-human-review\] \[--force\] \[--color\] \[D93F0B\]/);
     assert.match(calls[3], /\[--label\] \[needs-human-review\]$/);
     assert.ok(!calls.some((call) => call.includes("[merge]")));
   });
 
-  test("APPROVE after an ESCALATE updates the PR and swaps the label", () => {
+  test("APPROVE after an APPROVAL-NEEDS-HUMAN updates the PR and swaps the label", () => {
     const { code, calls } = run("github", "APPROVE", { FAKE_PR: "1", FAKE_LABELS: "bug\nneeds-human-review" });
     assert.equal(code, 0);
     assert.deepEqual(calls.slice(3, 6), [
@@ -130,7 +130,7 @@ describe("github/pull-request.sh", () => {
   });
 
   test("an existing PR without the other label keeps its labels", () => {
-    const { code, calls } = run("github", "ESCALATE", { FAKE_PR: "1", FAKE_LABELS: "needs-human-review" });
+    const { code, calls } = run("github", "APPROVAL-NEEDS-HUMAN", { FAKE_PR: "1", FAKE_LABELS: "needs-human-review" });
     assert.equal(code, 0);
     assert.ok(!calls.some((call) => call.includes("--remove-label")));
   });
@@ -145,7 +145,7 @@ describe("github/pull-request.sh", () => {
   test("rejects an unknown outcome before touching anything", () => {
     const { code, stderr, calls } = run("github", "PASS");
     assert.equal(code, 1);
-    assert.equal(stderr, "unknown FACTORY_OUTCOME: PASS (expected APPROVE or ESCALATE)\n");
+    assert.equal(stderr, "unknown FACTORY_OUTCOME: PASS (expected APPROVE or APPROVAL-NEEDS-HUMAN)\n");
     assert.deepEqual(calls, []);
   });
 });
@@ -166,14 +166,14 @@ describe("azure-devops/pull-request.sh", () => {
     assert.ok(!existsSync(join(WORKTREE, "pwned")));
   });
 
-  test("ESCALATE with no PR: labels it needs-human-review and doesn't auto-complete", () => {
-    const { code, calls } = run("azure-devops", "ESCALATE");
+  test("APPROVAL-NEEDS-HUMAN with no PR: labels it needs-human-review and doesn't auto-complete", () => {
+    const { code, calls } = run("azure-devops", "APPROVAL-NEEDS-HUMAN");
     assert.equal(code, 0);
     assert.ok(calls.some((call) => call.includes("[--labels] [needs-human-review]")));
     assert.ok(!calls.some((call) => call.includes("--auto-complete")));
   });
 
-  test("APPROVE after an ESCALATE updates the PR and swaps the label through the REST API", () => {
+  test("APPROVE after an APPROVAL-NEEDS-HUMAN updates the PR and swaps the label through the REST API", () => {
     const { code, calls } = run("azure-devops", "APPROVE", { FAKE_PR: "9", FAKE_LABELS: "needs-human-review" });
     assert.equal(code, 0);
     const route = "[project=proj-id] [repositoryId=repo-id] [pullRequestId=9]";
@@ -186,14 +186,14 @@ describe("azure-devops/pull-request.sh", () => {
   });
 
   test("an existing PR that already has the label isn't relabelled", () => {
-    const { code, calls } = run("azure-devops", "ESCALATE", { FAKE_PR: "9", FAKE_LABELS: "needs-human-review" });
+    const { code, calls } = run("azure-devops", "APPROVAL-NEEDS-HUMAN", { FAKE_PR: "9", FAKE_LABELS: "needs-human-review" });
     assert.equal(code, 0);
     assert.ok(!calls.some((call) => call.includes("[invoke]")));
   });
 
   test("a description over 4000 characters is cut, with a note, on a character boundary", () => {
     writeFileSync(BODY, "é".repeat(3000));
-    const { code, calls } = run("azure-devops", "ESCALATE");
+    const { code, calls } = run("azure-devops", "APPROVAL-NEEDS-HUMAN");
     assert.equal(code, 0);
     const description = calls.join("\n").match(/\[--description\] \[([\s\S]*?)\] \[--labels\]/)[1];
     assert.ok(Buffer.byteLength(description) <= 4000);
@@ -203,7 +203,7 @@ describe("azure-devops/pull-request.sh", () => {
   test("rejects an unknown outcome before touching anything", () => {
     const { code, stderr, calls } = run("azure-devops", "PASS");
     assert.equal(code, 1);
-    assert.equal(stderr, "unknown FACTORY_OUTCOME: PASS (expected APPROVE or ESCALATE)\n");
+    assert.equal(stderr, "unknown FACTORY_OUTCOME: PASS (expected APPROVE or APPROVAL-NEEDS-HUMAN)\n");
     assert.deepEqual(calls, []);
   });
 });

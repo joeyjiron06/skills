@@ -4,12 +4,14 @@
 # Run by `job approver complete` through config.json -> pull_request, inside the
 # job's worktree, with the $FACTORY_* variables set (see `job help`):
 #
-#   APPROVE   labels the PR auto-merge and sets it to auto-complete (squash,
-#             deleting the source branch) once its policies pass
-#   ESCALATE  labels the PR needs-human-review
+#   APPROVE               labels the PR auto-merge and sets it to auto-complete
+#                         (squash, deleting the source branch) once its policies pass
+#   APPROVAL-NEEDS-HUMAN  labels the PR needs-human-review
+#
+# (A BLOCKED decision opens no pull request, so this never runs for one.)
 #
 # Safe to run again: an existing active PR for the branch is updated, not
-# duplicated, and its label is swapped when an ESCALATE is followed by an APPROVE.
+# duplicated, and the other outcome's label is removed.
 #
 # Needs: az with the azure-devops extension (`az extension add --name
 # azure-devops`), logged in (`az login`). The organization, project and repo
@@ -20,10 +22,10 @@
 set -eu
 
 case "$FACTORY_OUTCOME" in
-  APPROVE)  label=auto-merge;         other=needs-human-review ;;
-  ESCALATE) label=needs-human-review; other=auto-merge ;;
+  APPROVE)              label=auto-merge;         other=needs-human-review ;;
+  APPROVAL-NEEDS-HUMAN) label=needs-human-review; other=auto-merge ;;
   *)
-    echo "unknown FACTORY_OUTCOME: $FACTORY_OUTCOME (expected APPROVE or ESCALATE)" >&2
+    echo "unknown FACTORY_OUTCOME: $FACTORY_OUTCOME (expected APPROVE or APPROVAL-NEEDS-HUMAN)" >&2
     exit 1
     ;;
 esac

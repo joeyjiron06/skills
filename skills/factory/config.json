@@ -19,7 +19,7 @@
     "APPROVE": [
       "sh \"$FACTORY_SCRIPTS/github/pull-request.sh\""
     ],
-    "ESCALATE": [
+    "APPROVAL-NEEDS-HUMAN": [
       "sh \"$FACTORY_SCRIPTS/github/pull-request.sh\""
     ]
   }
