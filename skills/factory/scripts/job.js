@@ -8,12 +8,14 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const USAGE = `
 Agents call this script, never write files directly to maintain the job process.
@@ -91,8 +93,10 @@ Pull requests:
   Always quote them ("$FACTORY_TITLE"): the title comes from a user prompt.
 `;
 
-const JOBS_DIR = join(import.meta.dirname, "..", "jobs");
-const REPO = join(import.meta.dirname, "..", "..", "..");
+export const JOBS_DIR = join(import.meta.dirname, "..", "jobs");
+// Installed at <repo>/.agents/skills/factory/scripts/ (or .claude/...): four
+// levels up from this folder is the repo root.
+const REPO = join(import.meta.dirname, "..", "..", "..", "..");
 const CONFIG = join(import.meta.dirname, "..", "config.json");
 
 // Every reviewer lens. `code` always reviews; the rest only when intake lists
@@ -153,18 +157,36 @@ const COMMANDS = {
   "approver info":        { options: { id }, run: approverInfo },
 };
 
-process.on("uncaughtException", fail);
+// Errors raised by fail(). The CLI prints just the message and exits 1;
+// importers (server.js) catch them like any other error.
+export class FactoryError extends Error {
+  [Symbol.for("nodejs.util.inspect.custom")]() {
+    return this.message;
+  }
+}
 
-const OPTION_NAMES = new Set(Object.values(COMMANDS).flatMap(({ options = {} }) => Object.keys(options)));
-const { values, positionals } = parseArgs({
-  allowPositionals: true,
-  options: Object.fromEntries([...OPTION_NAMES].map((name) => [name, { type: "string" }])),
-});
+// Run the CLI only when this file is the entry point (`node job.js ...`), not
+// when it's imported (e.g. by server.js). realpath on both sides, so a
+// symlinked script still counts as the entry point.
+if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) main();
 
-const name = positionals.join(" ");
-if (!Object.hasOwn(COMMANDS, name)) fail(`unknown command: ${name || "(none)"}. Run "job help" for usage.`);
-const { options = {}, run } = COMMANDS[name];
-run(parseOptions(name, options, values));
+function main() {
+  process.on("uncaughtException", (error) => {
+    console.error(error);
+    process.exit(1);
+  });
+
+  const optionNames = new Set(Object.values(COMMANDS).flatMap(({ options = {} }) => Object.keys(options)));
+  const { values, positionals } = parseArgs({
+    allowPositionals: true,
+    options: Object.fromEntries([...optionNames].map((name) => [name, { type: "string" }])),
+  });
+
+  const name = positionals.join(" ");
+  if (!Object.hasOwn(COMMANDS, name)) fail(`unknown command: ${name || "(none)"}. Run "job help" for usage.`);
+  const { options = {}, run } = COMMANDS[name];
+  run(parseOptions(name, options, values));
+}
 
 // Rejects options the command doesn't take, then requires every option in
 // `schema`. Each option's parser validates and converts its value.
@@ -840,7 +862,7 @@ function fileBody(path) {
 }
 
 // Parses flat `KEY: value` frontmatter into an object. Values stay strings.
-function readFrontmatter(path) {
+export function readFrontmatter(path) {
   const data = {};
   for (const line of frontmatterLines(path)) {
     if (line.startsWith("#")) continue;
@@ -854,7 +876,7 @@ function readFrontmatter(path) {
 }
 
 // A step file's frontmatter, or {} if the step hasn't started.
-function readState(path) {
+export function readState(path) {
   return existsSync(path) ? readFrontmatter(path) : {};
 }
 
@@ -884,6 +906,5 @@ function now() {
 }
 
 function fail(message) {
-  console.error(message);
-  process.exit(1);
+  throw new FactoryError(message);
 }

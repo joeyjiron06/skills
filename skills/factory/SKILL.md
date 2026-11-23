@@ -1,6 +1,6 @@
 ---
 name: factory
-description: Run the software factory on user defined tasks. Use when the user types /factory run, /factory run <n>, or /factory followed by anything else (a question, feedback on a job, or a new feature). The session that runs it becomes the one orchestrator for every job.
+description: Run the software factory on user defined tasks. Use when the user types /factory build <prompt>, /factory fix <issue>, or /factory followed by anything else (a question, feedback on a job, or a new feature). The session that runs it becomes the one orchestrator for every job.
 ---
 
 # Factory
@@ -26,11 +26,26 @@ Here are some definitions to folders referenced in the docs below.
 - `<repo>` - the root repo, no work should be done here, all work should be done in worktree
 - `<worktree>` - located in `<repo>/.worktrees/<job_id>-<title-slug>` which is a worktree for a specific job (its exact path is `WORKTREE` in `job.md`)
 - `<factory>` - either `<repo>/<agent_harness>/skills/factory/` where `<agent_harness>` is one of: `.agents`, `.claude`, `.cursor`, `.github`, `.copilot` or other similar dot folder for where agents install skills
-- `<agents>` - alias for `<factory>/agents/`
+- `<agents>` - alias for `<factory>/references/agents/`
 - `<jobs>` - alias for `<factory>/jobs/` where all the jobs live. each folder is a job id that is an incrementing 3 digit number
 - `<job folder>` - alias for `<factory>/jobs/<id>` where a specific job lives
 - `<scripts>` - alias for `<factory>/scripts/`
 - `<job.js>` - alias for `node <scripts>/job.js`
+
+## Dashboard server
+
+`<scripts>/server.js` serves a live dashboard of every job. Before you handle any
+`/factory` command, make sure it's running:
+
+1. Check whether something is already listening on its port (`PORT` env var, or
+   the default in `server.js`): `lsof -tiTCP:<port> -sTCP:LISTEN`. If it is,
+   leave it alone and don't start a second one.
+2. Otherwise start it in the background, detached from your turn, with output
+   sent to a log file: `nohup node <scripts>/server.js > <factory>/server.log 2>&1 &`.
+   Never run it in the foreground: it never exits and would block you.
+3. Tell the user the dashboard URL once, the first time you start it.
+
+Don't stop the server when jobs finish; it stays up for the whole session.
 
 ## Config
 

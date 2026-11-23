@@ -2,7 +2,7 @@
 
 This pipeline is used to build new features or edit existing ones.
 Each step below runs when the previous agent or script finishes.
-Each step corresponds to an agent definition in `agents/` folder so make sure to spawn them with that file
+Each step corresponds to an agent definition in the `<agents>` folder (`references/agents/`) so make sure to spawn them with that file
 
 Only run `<job.js> help` if you get stuck and need help with the script.
 

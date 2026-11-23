@@ -1,0 +1,691 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How /factory build works</title>
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=DM+Mono&family=Instrument+Serif:ital@1&display=swap" rel="stylesheet">
+<style type="text/tailwindcss">
+  @theme {
+    --color-canvas: #2b2622;
+    --color-soft: #383330;
+    --color-hair: #3f3a36;
+    --color-ink: #f7f5f0;
+    --color-strong: #dad2c1;
+    --color-body: #c9c0ad;
+    --color-mute: #aea69c;
+    --color-pass: #a8c49a;
+    --color-fail: #e0957a;
+    --color-wait: #e3c27f;
+    --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+    --font-mono: "DM Mono", ui-monospace, monospace;
+    --font-serif: "Instrument Serif", Georgia, serif;
+  }
+  @layer base {
+    html { scroll-behavior: smooth; }
+    body { @apply bg-canvas text-ink font-sans antialiased; }
+    h2 { @apply text-[32px] leading-10 font-medium tracking-[-0.8px] text-ink; }
+    h3 { @apply text-[20px] leading-7 font-medium tracking-[-0.3px] text-ink; }
+    p, li { @apply text-body leading-6; }
+    code { @apply font-mono text-[13px] text-strong bg-soft px-1.5 py-0.5 rounded-[3px]; }
+    a { @apply underline decoration-hair underline-offset-4 hover:decoration-ink; }
+    :focus-visible { outline: 2px solid #f7f5f0; outline-offset: 3px; }
+  }
+</style>
+<style>
+  /* Flowing edges */
+  .edge { fill: none; stroke: #6b625a; stroke-width: 1.5; }
+  .edge.flow { stroke-dasharray: 6 6; animation: dash 1.2s linear infinite; }
+  .edge.loop { stroke: #8a6e5f; }
+  .edge.exit { stroke: #5a524b; stroke-dasharray: 3 4; }
+  .edge.on { stroke: #f7f5f0; stroke-width: 2.5; }
+  @keyframes dash { to { stroke-dashoffset: -24; } }
+
+  .node rect { fill: #383330; stroke: #4d4640; stroke-width: 1; transition: fill .3s, stroke .3s; }
+  .node { cursor: pointer; }
+  .node:hover rect, .node:focus rect { stroke: #c9c0ad; }
+  .node.sel rect { stroke: #f7f5f0; stroke-width: 1.5; }
+  .node.on rect { fill: #f7f5f0; stroke: #f7f5f0; }
+  .node.on text { fill: #2b2622 !important; }
+  .node.on { animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 50% { filter: drop-shadow(0 0 10px rgba(247,245,240,.45)); } }
+  .node:focus { outline: none; }
+
+  .term rect { fill: #2b2622; stroke: #5a524b; stroke-dasharray: 3 3; }
+
+  /* Data map */
+  .link { stroke: #4d4640; stroke-width: 1.2; fill: none; transition: stroke .2s, opacity .2s; }
+  .dm.dim .link { opacity: .12; }
+  .dm .link.hl { stroke: #f7f5f0; opacity: 1; stroke-width: 1.8; }
+  .dm.dim .chip:not(.hl) { opacity: .35; }
+  .chip { transition: opacity .2s; cursor: default; }
+
+  .fade-in { animation: fade .35s ease-out; }
+  @keyframes fade { from { opacity: 0; transform: translateY(4px); } }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<header class="border-b border-hair">
+  <div class="max-w-[1200px] mx-auto px-6 py-4 flex items-center justify-between gap-4">
+    <span class="font-mono text-[14px] text-ink">/factory build</span>
+    <nav aria-label="Sections" class="hidden md:flex gap-6 text-[14px] font-medium">
+      <a class="no-underline text-body hover:text-ink" href="#summary">Summary</a>
+      <a class="no-underline text-body hover:text-ink" href="#flow">The flow</a>
+      <a class="no-underline text-body hover:text-ink" href="#stages">Stages</a>
+      <a class="no-underline text-body hover:text-ink" href="#files">Files</a>
+      <a class="no-underline text-body hover:text-ink" href="#rules">Rules</a>
+      <a class="no-underline text-body hover:text-ink" href="#glossary">Glossary</a>
+      <a class="no-underline text-body hover:text-ink" href="#gaps">Open points</a>
+    </nav>
+  </div>
+</header>
+
+<main class="max-w-[1200px] mx-auto px-6">
+
+  <!-- Hero -->
+  <section class="pt-20 pb-12">
+    <p class="font-mono text-[13px] text-mute mb-4">skills/factory · build pipeline</p>
+    <h1 class="text-[40px] md:text-[64px] leading-[1.1] font-normal tracking-[-1.6px] max-w-[900px]">
+      How the factory turns a prompt into a <span class="font-serif italic">pull request</span>
+    </h1>
+    <p class="text-[18px] leading-7 mt-6 max-w-[720px]">
+      This page explains what happens after you type <code>/factory build &lt;prompt&gt;</code>:
+      which agent runs at each stage, what it writes, and what sends a job forward, back, or to you.
+    </p>
+  </section>
+
+  <!-- Summary -->
+  <section id="summary" class="py-12 border-t border-hair">
+    <h2>In short</h2>
+    <div class="grid md:grid-cols-2 gap-10 mt-6">
+      <ul class="space-y-3 list-disc pl-5 text-[16px]">
+        <li>Your session becomes the <strong class="text-ink font-medium">orchestrator</strong>. It starts agents and reads their results. It never writes code or edits files itself.</li>
+        <li>Each job moves through <strong class="text-ink font-medium">7 stages</strong>: create, intake, spec, build, gate, review, approve. Then it is marked complete.</li>
+        <li>Build, gate and review repeat in <strong class="text-ink font-medium">rounds</strong>, up to <code>max_rounds</code> (3 by default). A failed gate or a review that asks for changes starts the next round.</li>
+        <li>When the last round still fails, the job goes to the approver, which marks it <strong class="text-ink font-medium">BLOCKED</strong> and opens no pull request.</li>
+        <li>A round that passes always ends in a <strong class="text-ink font-medium">pull request</strong>. It either merges on its own, or waits for a human to review it. The approver's decision is final.</li>
+      </ul>
+      <div class="bg-soft rounded-[4px] p-6">
+        <h3 class="mb-3">When you are asked to step in</h3>
+        <ul class="space-y-2 text-[15px]">
+          <li><span class="text-wait font-mono text-[13px]">INTAKE BLOCKED</span>: intake has questions only you can answer. Your reply is added to <code>intake.md</code> and intake decides again.</li>
+          <li><span class="text-wait font-mono text-[13px]">BUILD BLOCKED</span>: the builder can't meet the spec. Your reply is added to that round's <code>build.md</code> and the builder carries on in the <em>same</em> round. Say “stop” and the job goes to the approver instead.</li>
+          <li><span class="text-wait font-mono text-[13px]">NEEDS HUMAN</span>: the PR is open with the <code>needs-human-review</code> label. Review it and merge it yourself.</li>
+          <li><span class="text-fail font-mono text-[13px]">BLOCKED</span>: the factory couldn't finish the job. It ran out of rounds or you said stop. No PR. Take over on the job's branch and worktree.</li>
+          <li><span class="text-fail font-mono text-[13px]">PR FAIL</span>: opening the pull request failed. See <code>pr.md</code>, fix the cause, and run it again.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- Flow diagram -->
+  <section id="flow" class="py-12 border-t border-hair">
+    <div class="flex flex-wrap items-end justify-between gap-4">
+      <div>
+        <h2>The flow</h2>
+        <p class="mt-2 max-w-[680px]">Select a stage for details, or play an example job to watch it move through the pipeline.</p>
+      </div>
+      <div class="flex gap-2">
+        <button id="play" class="bg-ink text-canvas text-[14px] font-medium px-4 py-2 rounded-[4px] hover:opacity-90">▶ Play example job</button>
+        <button id="step" class="border border-hair text-ink text-[14px] font-medium px-4 py-2 rounded-[4px] hover:bg-soft">Next step</button>
+        <button id="reset" class="border border-hair text-body text-[14px] font-medium px-4 py-2 rounded-[4px] hover:bg-soft">Reset</button>
+      </div>
+    </div>
+
+    <div class="mt-8 bg-[#26221f] border border-hair rounded-[4px] p-4 overflow-x-auto">
+      <svg id="flowsvg" viewBox="0 0 1340 500" class="min-w-[960px] w-full" role="img" aria-labelledby="flowTitle flowDesc">
+        <title id="flowTitle">The /factory build pipeline</title>
+        <desc id="flowDesc">Create, Intake, Spec, Build, Gate, Review, Approver, Complete, left to right. A BLOCKED intake waits for your reply, then runs intake again; REJECT ends the job. A BLOCKED build waits for your reply, then resumes the same round, or goes to the approver if you say stop. Gate FAIL and review CHANGES loop back to Build for the next round while rounds are left; once the last round fails, the job goes to the approver, which marks it BLOCKED with no pull request. A passing round gets APPROVE or APPROVAL-NEEDS-HUMAN; both open a pull request and the job is marked complete.</desc>
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10z" fill="#8a8178"/>
+          </marker>
+        </defs>
+
+        <!-- column hints -->
+        <text x="20" y="150" fill="#aea69c" font-family="DM Mono" font-size="11">ONCE PER JOB</text>
+        <rect x="700" y="158" width="280" height="2" fill="#3f3a36"/>
+        <text x="700" y="150" fill="#aea69c" font-family="DM Mono" font-size="11">REPEATS EACH ROUND (N ≤ max_rounds)</text>
+
+        <!-- main edges -->
+        <g font-family="DM Mono" font-size="11" fill="#c9c0ad" text-anchor="middle">
+          <path id="e-create-intake" class="edge flow" d="M130 222 H188" marker-end="url(#arr)"/>
+          <text x="160" y="214">job.md</text>
+          <path id="e-intake-spec" class="edge flow" d="M300 222 H358" marker-end="url(#arr)"/>
+          <text x="330" y="214">ACCEPT</text>
+          <path id="e-spec-build" class="edge flow" d="M470 222 H528" marker-end="url(#arr)"/>
+          <text x="500" y="214">spec</text>
+          <path id="e-build-gate" class="edge flow" d="M640 222 H698" marker-end="url(#arr)"/>
+          <text x="670" y="214">READY</text>
+          <path id="e-gate-review" class="edge flow" d="M810 222 H868" marker-end="url(#arr)"/>
+          <text x="840" y="214">PASS</text>
+          <path id="e-review-approver" class="edge flow" d="M980 222 H1038" marker-end="url(#arr)"/>
+          <text x="1010" y="214">all PASS</text>
+          <path id="e-approver-complete" class="edge flow" d="M1150 222 H1208" marker-end="url(#arr)"/>
+          <text x="1180" y="214">PR open</text>
+        </g>
+
+        <!-- feedback loops (top) -->
+        <g font-family="DM Mono" font-size="11" fill="#c9c0ad">
+          <path id="e-intake-blocked" class="edge exit" d="M230 190 V94" marker-end="url(#arr)"/>
+          <text x="224" y="150" text-anchor="end" fill="#e3c27f">BLOCKED</text>
+          <path id="e-intakefb-intake" class="edge loop flow" d="M270 94 V188" marker-end="url(#arr)"/>
+          <text x="276" y="130">your reply</text>
+
+          <path id="e-build-blocked" class="edge exit" d="M570 190 V94" marker-end="url(#arr)"/>
+          <text x="564" y="150" text-anchor="end" fill="#e3c27f">BLOCKED</text>
+          <path id="e-buildfb-build" class="edge loop flow" d="M610 94 V188" marker-end="url(#arr)"/>
+          <text x="616" y="120">your reply</text>
+          <text x="616" y="134" fill="#aea69c">same round N</text>
+
+          <path id="e-buildfb-stop" class="edge exit" d="M640 66 H1085 V188" marker-end="url(#arr)"/>
+          <text x="860" y="58" text-anchor="middle">“stop” → approver</text>
+        </g>
+
+        <!-- exits -->
+        <g font-family="DM Mono" font-size="11" fill="#aea69c">
+          <path class="edge exit" d="M200 190 L112 94" marker-end="url(#arr)"/>
+          <g class="term"><rect x="30" y="40" width="110" height="52" rx="4"/></g>
+          <text x="85" y="62" text-anchor="middle" fill="#e0957a">REJECT</text>
+          <text x="85" y="79" text-anchor="middle" font-family="Inter" font-size="11">job ends</text>
+
+          <path id="e-approver-prfail" class="edge exit" d="M1130 190 L1236 94" marker-end="url(#arr)"/>
+          <g class="term"><rect x="1200" y="40" width="125" height="52" rx="4"/></g>
+          <text x="1262" y="62" text-anchor="middle" fill="#e0957a">PR FAIL</text>
+          <text x="1262" y="79" text-anchor="middle" font-family="Inter" font-size="11">fix, then rerun</text>
+
+          <path id="e-approver-blocked" class="edge exit" d="M1125 254 V428" marker-end="url(#arr)"/>
+          <text x="1131" y="300">CHECKS: FAIL</text>
+          <g class="term"><rect x="1060" y="430" width="140" height="52" rx="4"/></g>
+          <text x="1130" y="452" text-anchor="middle" fill="#e0957a">BLOCKED</text>
+          <text x="1130" y="469" text-anchor="middle" font-family="Inter" font-size="11">no PR · to a human</text>
+        </g>
+
+        <!-- round loops (bottom) -->
+        <g font-family="DM Mono" font-size="11" fill="#c9c0ad">
+          <path id="e-gate-loop" class="edge loop flow" d="M745 254 V300 H605 V256" marker-end="url(#arr)"/>
+          <text x="618" y="294">FAIL → round N+1</text>
+          <path id="e-review-loop" class="edge loop flow" d="M915 254 V340 H585 V256" marker-end="url(#arr)"/>
+          <text x="600" y="356">CHANGES → round N+1</text>
+          <path id="e-review-out" class="edge exit" d="M945 254 V390"/>
+          <path id="e-gate-out" class="edge exit" d="M795 254 V390 H1075 V256" marker-end="url(#arr)"/>
+          <text x="810" y="384">no rounds left → approver</text>
+        </g>
+
+        <!-- nodes -->
+        <g id="nodes" font-family="Inter"></g>
+
+        <!-- PR notes -->
+        <text x="1265" y="280" text-anchor="middle" fill="#a8c49a" font-size="11" font-family="DM Mono">APPROVE</text>
+        <text x="1265" y="294" text-anchor="middle" fill="#aea69c" font-size="11" font-family="Inter">PR auto-merges</text>
+        <text x="1265" y="316" text-anchor="middle" fill="#e3c27f" font-size="11" font-family="DM Mono">NEEDS-HUMAN</text>
+        <text x="1265" y="330" text-anchor="middle" fill="#aea69c" font-size="11" font-family="Inter">you review the PR</text>
+      </svg>
+    </div>
+
+    <!-- narration / detail -->
+    <div class="grid md:grid-cols-[1fr_320px] gap-6 mt-6">
+      <div id="detail" class="bg-soft rounded-[4px] p-6 min-h-[220px]" aria-live="polite"></div>
+      <div class="bg-soft rounded-[4px] p-6">
+        <p class="font-mono text-[12px] text-mute">EXAMPLE JOB · LOG</p>
+        <ol id="log" class="mt-3 space-y-1.5 font-mono text-[12px] leading-5 max-h-[260px] overflow-y-auto"></ol>
+      </div>
+    </div>
+
+    <!-- legend -->
+    <div class="flex flex-wrap gap-6 mt-6 text-[13px] text-mute">
+      <span class="flex items-center gap-2"><svg width="34" height="8"><path d="M0 4H34" class="edge flow"/></svg>moves forward</span>
+      <span class="flex items-center gap-2"><svg width="34" height="8"><path d="M0 4H34" class="edge loop flow"/></svg>loops back</span>
+      <span class="flex items-center gap-2"><svg width="34" height="8"><path d="M0 4H34" class="edge exit"/></svg>waits for you, gives up, or ends</span>
+    </div>
+  </section>
+
+  <!-- Stages -->
+  <section id="stages" class="py-12 border-t border-hair">
+    <h2>Stage by stage</h2>
+    <p class="mt-2 max-w-[720px]">Every agent follows the same three moves: run <code>start</code>, do its work, then run <code>complete</code> with an outcome and a temporary markdown file. The script writes the job file and deletes the temporary file. The orchestrator then reads the result with <code>info</code> and picks the next stage.</p>
+    <div id="stagecards" class="grid md:grid-cols-2 gap-4 mt-8"></div>
+  </section>
+
+  <!-- Reviewers -->
+  <section id="reviewers" class="py-12 border-t border-hair">
+    <h2>Which reviewers run</h2>
+    <p class="mt-2 max-w-[720px]">Intake tags each job with the <strong class="text-ink font-medium">surfaces</strong> it touches. The code reviewer always runs. The others run only when intake names their surface. All selected reviewers run at the same time, and the orchestrator waits for every one before moving on.</p>
+    <div class="mt-8 bg-[#26221f] border border-hair rounded-[4px] p-4 overflow-x-auto">
+      <svg viewBox="0 0 1010 260" class="min-w-[700px] w-full" role="img" aria-labelledby="revT">
+        <title id="revT">Intake surfaces decide which reviewers run in parallel; all must pass before the approver</title>
+        <g font-family="Inter">
+          <rect x="20" y="95" width="150" height="70" rx="4" fill="#383330" stroke="#4d4640"/>
+          <text x="95" y="125" text-anchor="middle" fill="#f7f5f0" font-size="14" font-weight="500">intake.md</text>
+          <text x="95" y="145" text-anchor="middle" fill="#aea69c" font-size="11" font-family="DM Mono">SURFACES: ui, …</text>
+
+          <g font-family="DM Mono" font-size="11" fill="#aea69c">
+            <path class="edge flow" d="M170 130 C230 130 240 40 300 40" marker-end="url(#arr)"/>
+            <text x="200" y="60">always</text>
+            <path class="edge flow" d="M170 130 C230 130 240 100 300 100" marker-end="url(#arr)"/>
+            <text x="222" y="108">security</text>
+            <path class="edge flow" d="M170 130 C230 130 240 160 300 160" marker-end="url(#arr)"/>
+            <text x="222" y="160">ui</text>
+            <path class="edge flow" d="M170 130 C230 130 240 220 300 220" marker-end="url(#arr)"/>
+            <text x="200" y="214">ux</text>
+          </g>
+
+          <g>
+            <rect x="300" y="18" width="220" height="44" rx="4" fill="#383330" stroke="#c9c0ad"/>
+            <text x="316" y="45" fill="#f7f5f0" font-size="13" font-weight="500">reviewer-code</text>
+            <text x="505" y="45" text-anchor="end" fill="#aea69c" font-size="11" font-family="DM Mono">correctness</text>
+            <rect x="300" y="78" width="220" height="44" rx="4" fill="#383330" stroke="#4d4640"/>
+            <text x="316" y="105" fill="#f7f5f0" font-size="13" font-weight="500">reviewer-security</text>
+            <text x="505" y="105" text-anchor="end" fill="#aea69c" font-size="11" font-family="DM Mono">auth, input</text>
+            <rect x="300" y="138" width="220" height="44" rx="4" fill="#383330" stroke="#4d4640"/>
+            <text x="316" y="165" fill="#f7f5f0" font-size="13" font-weight="500">reviewer-ui</text>
+            <text x="505" y="165" text-anchor="end" fill="#aea69c" font-size="11" font-family="DM Mono">looks right</text>
+            <rect x="300" y="198" width="220" height="44" rx="4" fill="#383330" stroke="#4d4640"/>
+            <text x="316" y="225" fill="#f7f5f0" font-size="13" font-weight="500">reviewer-ux</text>
+            <text x="505" y="225" text-anchor="end" fill="#aea69c" font-size="11" font-family="DM Mono">works right</text>
+          </g>
+
+          <g>
+            <path class="edge" d="M520 40 C580 40 590 130 640 130"/>
+            <path class="edge" d="M520 100 C580 100 590 130 640 130"/>
+            <path class="edge" d="M520 160 C580 160 590 130 640 130"/>
+            <path class="edge" d="M520 220 C580 220 590 130 640 130" marker-end="url(#arr)"/>
+            <rect x="640" y="100" width="90" height="60" rx="4" fill="#2b2622" stroke="#8a8178"/>
+            <text x="685" y="126" text-anchor="middle" fill="#f7f5f0" font-size="13" font-weight="500">wait</text>
+            <text x="685" y="143" text-anchor="middle" fill="#aea69c" font-size="11">for all</text>
+            <path class="edge flow" d="M730 100 H790" marker-end="url(#arr)"/>
+            <text x="800" y="104" fill="#a8c49a" font-size="12" font-family="DM Mono">all PASS → approver</text>
+            <path class="edge loop flow" d="M730 130 H790" marker-end="url(#arr)"/>
+            <text x="800" y="134" fill="#e0957a" font-size="12" font-family="DM Mono">any CHANGES → build N+1</text>
+            <path class="edge exit" d="M730 160 H790" marker-end="url(#arr)"/>
+            <text x="800" y="164" fill="#aea69c" font-size="12" font-family="DM Mono">CHANGES on last round</text>
+            <text x="800" y="180" fill="#aea69c" font-size="12" font-family="DM Mono">→ approver (BLOCKED)</text>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <p class="text-[14px] text-mute mt-3">Reviewers only block on real problems. Matters of taste go under “Notes” and don't stop the job. From round 2 on, each reviewer first checks that its own earlier findings were fixed. The UI and UX reviewers each get a port and their own browser session (<code>&lt;id&gt;-ui</code>, <code>&lt;id&gt;-ux</code>).</p>
+  </section>
+
+  <!-- Files -->
+  <section id="files" class="py-12 border-t border-hair">
+    <h2>Who writes and reads each file</h2>
+    <p class="mt-2 max-w-[720px]">All state lives in markdown files in the job folder, <code>&lt;factory&gt;/jobs/&lt;id&gt;/</code>. No one edits these directly. Agents and the orchestrator pass content to <code>job.js</code>, which writes the files. Hover over or focus a file to see its connections.</p>
+    <div class="mt-8 bg-[#26221f] border border-hair rounded-[4px] p-4 overflow-x-auto">
+      <svg id="dm" class="dm min-w-[760px] w-full" viewBox="0 0 1000 560" role="img" aria-labelledby="dmT">
+        <title id="dmT">Writers on the left, job files in the middle, readers on the right</title>
+      </svg>
+    </div>
+
+    <h3 class="mt-10">Job folder layout</h3>
+    <pre class="mt-4 bg-soft rounded-[4px] p-6 font-mono text-[13px] leading-6 text-strong overflow-x-auto"><span class="text-mute">jobs/001/</span>
+├── job.md               <span class="text-mute"># ID, TITLE, BRANCH, WORKTREE, STARTED, FINISHED + your prompt</span>
+├── intake.md            <span class="text-mute"># ACCEPT | BLOCKED | REJECT · risk · surfaces · scope</span>
+│                        <span class="text-mute">#   + "# User feedback n" and the decision after it</span>
+├── spec.md              <span class="text-mute"># requirements + acceptance criteria + assumptions</span>
+├── round-1/
+│   ├── build.md         <span class="text-mute"># READY | BLOCKED + evidence + log</span>
+│   │                    <span class="text-mute">#   + "# User feedback n" and the report after it</span>
+│   └── gate.md          <span class="text-mute"># PASS | FAIL + each command's output</span>
+├── round-2/
+│   ├── build.md
+│   ├── gate.md
+│   ├── review-code.md   <span class="text-mute"># PASS | CHANGES (always)</span>
+│   ├── review-security.md <span class="text-mute"># only when intake flags security</span>
+│   ├── review-ui.md     <span class="text-mute"># only when intake flags ui</span>
+│   └── review-ux.md     <span class="text-mute"># only when intake flags ux</span>
+├── decision.md          <span class="text-mute"># ROUND · CHECKS · APPROVE | APPROVAL-NEEDS-HUMAN | BLOCKED: the PR body</span>
+└── pr.md                <span class="text-mute"># log of the PR commands; URL on the last line</span>
+
+<span class="text-mute">&lt;repo&gt;/.worktrees/001-add-dark-mode/</span>   <span class="text-mute"># the job's own checkout, on branch factory/001-add-dark-mode,</span>
+                                        <span class="text-mute"># created by spec-writer start (or builder start) from origin/&lt;base_branch&gt;</span></pre>
+
+    <h3 class="mt-10">Every file has the same status header</h3>
+    <div class="mt-4 bg-[#26221f] border border-hair rounded-[4px] p-4 overflow-x-auto">
+      <svg viewBox="0 0 900 150" class="min-w-[620px] w-full" role="img" aria-labelledby="stT">
+        <title id="stT">Status lifecycle: not started, then RUNNING after start, then COMPLETE with an OUTCOME after complete. Feedback on a BLOCKED intake or build reopens it as RUNNING with a FEEDBACK count.</title>
+        <g font-family="Inter">
+          <rect x="20" y="25" width="170" height="50" rx="4" fill="#2b2622" stroke="#5a524b" stroke-dasharray="3 3"/>
+          <text x="105" y="55" text-anchor="middle" fill="#aea69c" font-size="13">no file yet</text>
+          <path class="edge flow" d="M190 50 H330" marker-end="url(#arr)"/>
+          <text x="260" y="40" text-anchor="middle" fill="#c9c0ad" font-size="11" font-family="DM Mono">start</text>
+          <rect x="330" y="25" width="200" height="50" rx="4" fill="#383330" stroke="#e3c27f"/>
+          <text x="430" y="47" text-anchor="middle" fill="#e3c27f" font-size="13" font-family="DM Mono">STATUS: RUNNING</text>
+          <text x="430" y="64" text-anchor="middle" fill="#aea69c" font-size="11">STARTED set</text>
+          <path class="edge flow" d="M530 50 H670" marker-end="url(#arr)"/>
+          <text x="600" y="40" text-anchor="middle" fill="#c9c0ad" font-size="11" font-family="DM Mono">complete</text>
+          <rect x="670" y="25" width="210" height="50" rx="4" fill="#383330" stroke="#a8c49a"/>
+          <text x="775" y="47" text-anchor="middle" fill="#a8c49a" font-size="13" font-family="DM Mono">STATUS: COMPLETE</text>
+          <text x="775" y="64" text-anchor="middle" fill="#aea69c" font-size="11">FINISHED + OUTCOME set</text>
+          <path class="edge loop flow" d="M775 75 V115 H450 V77" marker-end="url(#arr)"/>
+          <text x="612" y="108" text-anchor="middle" fill="#c9c0ad" font-size="11" font-family="DM Mono">feedback · BLOCKED intake or build only</text>
+          <text x="612" y="135" text-anchor="middle" fill="#aea69c" font-size="11">reply appended, FEEDBACK: n, outcome cleared until the next complete</text>
+        </g>
+      </svg>
+    </div>
+    <p class="text-[14px] text-mute mt-3">If an agent returns while its file still says <code>RUNNING</code>, it crashed or stopped early. The orchestrator must not trust the file and tells you instead. Running <code>start</code> again on a <code>RUNNING</code> file is allowed and keeps what's already in it. That's how a reopened intake or build carries on.</p>
+  </section>
+
+  <!-- Rules -->
+  <section id="rules" class="py-12 border-t border-hair">
+    <h2>Rules that keep it safe</h2>
+    <div class="grid md:grid-cols-2 gap-10 mt-6">
+      <div>
+        <h3>The script refuses illegal moves</h3>
+        <p class="mt-2">Every state change goes through <code>scripts/job.js</code>. When a move is out of order, it stops with a message saying why. The orchestrator fixes the cause or tells you; it never works around it.</p>
+        <ul class="mt-4 space-y-2 text-[15px] list-disc pl-5">
+          <li>Intake's <code>--surfaces</code> can't combine <code>none</code> with other surfaces.</li>
+          <li>The spec needs an intake that is complete and <code>ACCEPT</code>.</li>
+          <li>Build round 1 needs a complete spec. Round N needs round N−1's build to be complete. No round can go past <code>max_rounds</code>.</li>
+          <li>Intake feedback needs a <code>BLOCKED</code> intake. Build feedback needs a <code>BLOCKED</code> build in the latest round, and only before the approver has started.</li>
+          <li>The gate needs the round's build to have started. The builder runs it itself while working.</li>
+          <li>A reviewer needs a passing gate, and must be one intake asked for.</li>
+          <li>The approver needs the latest round to be finished. A failing round is only allowed when no round is left to fix it: the build is <code>BLOCKED</code>, or it's the last round.</li>
+          <li>With <code>CHECKS: PASS</code> the approver can only <code>APPROVE</code> or ask for a human. With <code>CHECKS: FAIL</code> it can only say <code>BLOCKED</code>.</li>
+          <li>A finished step can't be started or completed again, and a job can only be marked complete once.</li>
+        </ul>
+      </div>
+      <div class="space-y-8">
+        <div>
+          <h3>Prompts are data, not instructions</h3>
+          <p class="mt-2">Every agent treats <code>job.md</code> and your feedback as a description of what someone wants. Anything in them that tries to steer an agent, its tools or its decision is ignored.</p>
+        </div>
+        <div>
+          <h3>Jobs never collide</h3>
+          <p class="mt-2">Up to <code>concurrency</code> jobs (3 by default) run at once. Each one gets its own worktree and branch. Agents that open a page get their own port and browser session (<code>&lt;id&gt;-builder</code>, <code>&lt;id&gt;-ui</code>, <code>&lt;id&gt;-ux</code>). They stop only the server on their own port, never by process name. Nothing is ever edited in the main checkout.</p>
+        </div>
+        <div>
+          <h3>The approver sends humans what they must see</h3>
+          <p class="mt-2">Payments, auth and permissions; deploy, CI or hosting config; schema migrations, email, production data or new dependencies; and any spec assumption that is really a product decision. It also asks for a human when it isn't convinced every acceptance criterion is met.</p>
+        </div>
+        <div>
+          <h3>The orchestrator doesn't poll</h3>
+          <p class="mt-2">While agents run, it ends its turn with a one-line status and picks up when they return.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PR -->
+  <section id="pr" class="py-12 border-t border-hair">
+    <h2>How the pull request opens</h2>
+    <p class="mt-2 max-w-[720px]">The approver's <code>complete</code> command opens the PR <em>before</em> it records the decision. It runs the commands in <code>config.json → pull_request.&lt;OUTCOME&gt;</code> inside the job's worktree, in order, and stops at the first failure. An empty list opens no PR.</p>
+    <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
+      <div class="bg-soft rounded-[4px] p-6">
+        <p class="font-mono text-[13px] text-pass">APPROVE</p>
+        <p class="mt-2 text-[15px]">Pushes the branch. The PR is labelled <code>auto-merge</code> and set to squash-merge once the host's checks pass. Then the orchestrator runs <code>job.js complete</code>.</p>
+      </div>
+      <div class="bg-soft rounded-[4px] p-6">
+        <p class="font-mono text-[13px] text-wait">APPROVAL-NEEDS-HUMAN</p>
+        <p class="mt-2 text-[15px]">Labelled <code>needs-human-review</code>. You get the “For the human” section of <code>decision.md</code>. The job is still marked complete. The rest is up to you.</p>
+      </div>
+      <div class="bg-soft rounded-[4px] p-6">
+        <p class="font-mono text-[13px] text-fail">BLOCKED</p>
+        <p class="mt-2 text-[15px]">No PR. You get each failed check and what's left to do, plus the branch and worktree. The job stays open and is never marked complete.</p>
+      </div>
+      <div class="bg-soft rounded-[4px] p-6">
+        <p class="font-mono text-[13px] text-fail">PR FAIL</p>
+        <p class="mt-2 text-[15px]"><code>decision.md</code> stays <code>RUNNING</code> and <code>pr.md</code> logs the failed command. Fix the cause, then run <code>approver complete</code> again. Rerunning updates the same PR and swaps the label.</p>
+      </div>
+    </div>
+    <p class="text-[14px] text-mute mt-4">Ready-made scripts: <code>scripts/github/pull-request.sh</code> (default, needs <code>gh</code> and “Allow auto-merge” on) and <code>scripts/azure-devops/pull-request.sh</code> (needs <code>az</code>; auto-merge is auto-complete; descriptions are cut at 4000 characters). The PR title is the job title; the body is the approver's decision. Custom commands can read <code>$FACTORY_ID</code>, <code>$FACTORY_TITLE</code>, <code>$FACTORY_BRANCH</code>, <code>$FACTORY_BASE</code>, <code>$FACTORY_WORKTREE</code>, <code>$FACTORY_OUTCOME</code>, <code>$FACTORY_BODY_FILE</code> and <code>$FACTORY_SCRIPTS</code>. Always quote them.</p>
+  </section>
+
+  <!-- Glossary -->
+  <section id="glossary" class="py-12 border-t border-hair">
+    <h2>Glossary</h2>
+    <dl class="grid md:grid-cols-2 gap-x-10 gap-y-5 mt-6 text-[15px]">
+      <div><dt class="text-ink font-medium">Orchestrator</dt><dd class="text-body mt-1">The session where you typed <code>/factory</code>. It starts agents, reads results and talks to you.</dd></div>
+      <div><dt class="text-ink font-medium">Agent</dt><dd class="text-body mt-1">A background subagent with one job and one instruction file in <code>references/agents/</code>. Its model comes from <code>config.json → agents</code>.</dd></div>
+      <div><dt class="text-ink font-medium">Job</dt><dd class="text-body mt-1">One request, with a 3-digit id (<code>001</code>), a title, a folder, a branch and a worktree.</dd></div>
+      <div><dt class="text-ink font-medium">Round</dt><dd class="text-body mt-1">One pass of build → gate → review, in its own <code>round-N</code> folder. A job gets at most <code>max_rounds</code>. Feedback on a blocked build resumes the same round; it doesn't start a new one.</dd></div>
+      <div><dt class="text-ink font-medium">Gate</dt><dd class="text-body mt-1">The repo's checks (tests, lint, typecheck, build) listed in <code>config.json → gate</code>. All must pass.</dd></div>
+      <div><dt class="text-ink font-medium">Worktree</dt><dd class="text-body mt-1">A separate checkout at <code>&lt;repo&gt;/.worktrees/&lt;id&gt;-&lt;slug&gt;</code>, created from <code>origin/&lt;base_branch&gt;</code>. All code changes happen here, never in the main checkout.</dd></div>
+      <div><dt class="text-ink font-medium">Surfaces</dt><dd class="text-body mt-1">What a change touches: <code>ui</code>, <code>ux</code>, <code>security</code> or <code>none</code>. Decides which reviewers run.</dd></div>
+      <div><dt class="text-ink font-medium">Feedback</dt><dd class="text-body mt-1">Your reply to a blocked intake or build. It's saved word for word into that step's file under <code># User feedback n</code>, and the step runs again.</dd></div>
+      <div><dt class="text-ink font-medium">Checks</dt><dd class="text-body mt-1"><code>CHECKS: PASS | FAIL</code> in <code>decision.md</code>, set by <code>approver start</code>. It records whether the latest round's build, gate and reviews all passed, and limits what the approver may decide.</dd></div>
+      <div><dt class="text-ink font-medium">Outcome</dt><dd class="text-body mt-1">An agent's result, such as <code>ACCEPT</code>, <code>READY</code>, <code>PASS</code> or <code>APPROVE</code>. Only valid once <code>STATUS: COMPLETE</code>.</dd></div>
+    </dl>
+  </section>
+
+  <!-- Gaps -->
+  <section id="gaps" class="py-12 border-t border-hair mb-16">
+    <h2>Open points in the current skill</h2>
+    <p class="mt-2 max-w-[720px]">Found while reading the skill files. The earlier list is mostly fixed: the round limit is enforced, worktrees are created, blocked jobs have a way back, the file list includes every review, the <code>&lt;agents&gt;</code> path points at <code>references/agents/</code>, and the skill triggers on <code>build</code> and <code>fix</code>. These are what's left.</p>
+    <ul class="mt-6 space-y-3 list-disc pl-5 text-[15px] max-w-[860px]">
+      <li><strong class="text-ink font-medium">Missing file.</strong> <code>SKILL.md</code> still points <code>/factory fix</code> at <code>references/pipelines/fix.md</code>, which doesn't exist.</li>
+      <li><strong class="text-ink font-medium">Intake never flags <code>ux</code>.</strong> <code>job.js</code> accepts <code>ux</code> as a surface, but <code>agents/intake.md</code> only describes <code>ui</code> and <code>security</code> (“Both, or none”). So the UX reviewer will rarely, if ever, run.</li>
+      <li><strong class="text-ink font-medium">Ports aren't assigned anywhere.</strong> The builder, UI and UX agents expect a port in their prompt, but nothing says how the orchestrator picks one. The builder's prompt (<code>&lt;header&gt; Build round N.</code>) doesn't include one either. With 3 jobs at once, and UI and UX running at the same time, ports could clash.</li>
+      <li><strong class="text-ink font-medium">The gate is a placeholder.</strong> <code>config.json → gate</code> ships with a command that always fails. Until a repo sets it, every build ends <code>BLOCKED</code>, because the builder must see the gate pass.</li>
+      <li><strong class="text-ink font-medium">Some ends leave no marker.</strong> <code>REJECT</code> and a stopped intake never set <code>FINISHED</code>, so they look like open jobs. There's also no way back in once a <code>needs-human-review</code> PR gets review comments, because the approver's decision is final.</li>
+    </ul>
+  </section>
+</main>
+
+<footer class="border-t border-hair">
+  <div class="max-w-[1200px] mx-auto px-6 py-6 text-[12px] text-mute flex flex-wrap justify-between gap-2">
+    <span>Source: <span class="font-mono">skills/factory/SKILL.md · config.json · references/pipelines/build.md · references/agents/*.md · scripts/job.js · scripts/*/pull-request.sh</span></span>
+    <span>Written to ISO 24495-1 plain-language principles</span>
+  </div>
+</footer>
+
+<script>
+// ---------- Stage data ----------
+const STAGES = [
+  { id: "create", n: 0, name: "Create", who: "orchestrator", model: "—",
+    does: "Writes a short imperative title (under ~70 characters) and creates the job folder and job.md. The title becomes the PR title and, slugged, the branch and worktree name.",
+    cmd: 'job.js create --title "<title>" --prompt "<prompt>"',
+    reads: ["your prompt"], writes: ["job.md"],
+    outcomes: [["job id", "pass", "Go to Intake"]] },
+  { id: "intake", n: 1, name: "Intake", who: "intake agent", modelKey: "intake",
+    does: "Decides if the request is worth building and at what scope. Shrinks big requests to a useful first slice. Rates risk (low / medium / high) and surfaces (ui, ux, security, none). When resumed after your feedback, it decides again with your answers.",
+    cmd: "job.js intake complete --outcome … --risk … --surfaces … --rescoped …",
+    reads: ["job.md", "intake.md (on resume)", "AGENTS.md", "code it would touch"], writes: ["intake.md"],
+    outcomes: [["ACCEPT", "pass", "Go to Spec"], ["BLOCKED", "wait", "Asks you questions; waits for Intake feedback"], ["REJECT", "fail", "Job ends"]] },
+  { id: "spec", n: 2, name: "Spec", who: "spec-writer agent", modelKey: "spec-writer",
+    does: "spec-writer start creates the job's worktree. The agent then turns intake's scope (which is binding) into requirements and testable acceptance criteria. Doesn't ask questions; lists its own calls as Assumptions.",
+    cmd: "job.js spec-writer complete --content <file>",
+    reads: ["job.md", "intake.md", "AGENTS.md", "code"], writes: ["spec.md", "worktree"],
+    outcomes: [["done", "pass", "Go to Build, round 1"]] },
+  { id: "build", n: 3, name: "Build", who: "builder agent", modelKey: "builder",
+    does: "Implements the spec in the worktree, runs the gate itself, verifies every acceptance criterion (with a browser for visible changes) and commits. From round 2 it fixes gate failures and review findings. When resumed after your feedback, it carries on in the same round. builder start refuses any round past max_rounds.",
+    cmd: "job.js builder complete --round N --outcome READY|BLOCKED",
+    reads: ["spec.md", "AGENTS.md", "round N−1 files", "own build.md + your feedback"], writes: ["round-N/build.md", "commits"],
+    outcomes: [["READY", "pass", "Go to Gate"], ["BLOCKED", "wait", "Tells you why; waits for Build feedback"], ["no rounds left", "fail", "Go to Approver (BLOCKED)"]] },
+  { id: "gate", n: 4, name: "Gate", who: "job.js (no agent)", model: "—",
+    does: "Runs every command in config.json → gate inside the worktree and records each one's output. No reviewer runs on a failing build.",
+    cmd: "job.js gate check --round N",
+    reads: ["config.json → gate"], writes: ["round-N/gate.md"],
+    outcomes: [["PASS", "pass", "Go to Review"], ["FAIL", "fail", "Build round N+1, or Approver on the last round"]] },
+  { id: "review", n: 5, name: "Review", who: "1–4 reviewer agents, in parallel", modelKey: "reviewer-code",
+    does: "Code always reviews. Security, UI and UX review when intake named their surface. The orchestrator waits for all of them, then reads every verdict at once.",
+    cmd: "job.js reviewer info --round N --reviewer ALL",
+    reads: ["spec.md", "build.md", "gate.md", "the diff", "own last review"], writes: ["round-N/review-*.md"],
+    outcomes: [["all PASS", "pass", "Go to Approver"], ["any CHANGES", "fail", "Build round N+1, or Approver on the last round"]] },
+  { id: "approver", n: 6, name: "Approver", who: "approver agent", modelKey: "approver",
+    does: "The final gate. approver start checks the latest round (CHECKS: PASS or FAIL). On a passing round it spot-checks a criterion, checks scope, and decides whether this can merge with no human looking. On a failing round it explains why the factory couldn't finish. Its write-up is decision.md and the PR description. The decision is final.",
+    cmd: "job.js approver complete --outcome APPROVE|APPROVAL-NEEDS-HUMAN|BLOCKED",
+    reads: ["every job file", "the diff"], writes: ["decision.md", "pr.md", "pull request"],
+    outcomes: [["APPROVE", "pass", "PR set to auto-merge → Complete"], ["APPROVAL-NEEDS-HUMAN", "wait", "PR labelled needs-human-review → Complete"], ["BLOCKED", "fail", "Only when CHECKS: FAIL. No PR; job stays open for you"]] },
+  { id: "complete", n: 7, name: "Complete", who: "orchestrator", model: "—",
+    does: "Runs once the approver's PR opened, after APPROVE or APPROVAL-NEEDS-HUMAN. Adds FINISHED to job.md. Never run after BLOCKED.",
+    cmd: "job.js complete --id <id>",
+    reads: ["decision.md"], writes: ["job.md (FINISHED)"],
+    outcomes: [["done", "pass", "Job finished"]] },
+  { id: "intake-fb", n: 8, name: "Intake feedback", who: "you, via the orchestrator", model: "—",
+    does: "You answer a BLOCKED intake's questions. The orchestrator saves your reply word for word into intake.md under “# User feedback n”, which reopens it. Then intake runs again and appends its new decision below. Say “stop” and the job stays parked.",
+    cmd: "job.js intake feedback --id <id> --content <file>",
+    reads: ["your reply"], writes: ["intake.md (reopened)"],
+    outcomes: [["recorded", "pass", "Intake runs again"], ["stop", "fail", "Job stays parked at BLOCKED"]] },
+  { id: "build-fb", n: 9, name: "Build feedback", who: "you, via the orchestrator", model: "—",
+    does: "You answer a BLOCKED build. The orchestrator saves your reply word for word into that round's build.md, which reopens it. The builder resumes the same round from its earlier commits. Where your feedback and the spec disagree, your feedback wins.",
+    cmd: "job.js builder feedback --id <id> --round N --content <file>",
+    reads: ["your reply"], writes: ["round-N/build.md (reopened)"],
+    outcomes: [["recorded", "pass", "Build round N again → gate → review"], ["stop", "fail", "Go to Approver, which marks it BLOCKED"]] },
+];
+const MODELS = { "intake": "claude-fable", "spec-writer": "claude-opus", "builder": "claude-opus", "approver": "claude-opus", "reviewer-code": "code opus · security opus · ui hauki · ux sonnet" };
+const SUB = { create: "orchestrator", intake: "agent", spec: "agent", build: "agent · round N", gate: "script", review: "agents ×1–4", approver: "agent", complete: "orchestrator", "intake-fb": "you", "build-fb": "you" };
+const POS = { "intake-fb": [190, 40, 52], "build-fb": [530, 40, 52] };
+const toneClass = { pass: "text-pass", fail: "text-fail", wait: "text-wait" };
+const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+// ---------- Draw nodes ----------
+const NS = "http://www.w3.org/2000/svg";
+const nodesG = document.getElementById("nodes");
+STAGES.forEach((s) => {
+  const main = s.n < 8;
+  const [x, y, h] = main ? [20 + 170 * s.n, 190, 64] : POS[s.id];
+  const cx = x + 55;
+  const g = document.createElementNS(NS, "g");
+  g.setAttribute("class", "node"); g.dataset.id = s.id;
+  g.setAttribute("tabindex", "0"); g.setAttribute("role", "button");
+  g.setAttribute("aria-label", s.name + " stage");
+  g.innerHTML = main ? `
+    <rect x="${x}" y="${y}" width="110" height="${h}" rx="4"/>
+    <text x="${x + 10}" y="${y + 18}" fill="#aea69c" font-size="10" font-family="DM Mono">${s.n}</text>
+    <text x="${cx}" y="${y + 35}" text-anchor="middle" fill="#f7f5f0" font-size="15" font-weight="500">${s.name}</text>
+    <text x="${cx}" y="${y + 53}" text-anchor="middle" fill="#aea69c" font-size="10.5" font-family="DM Mono">${SUB[s.id]}</text>` : `
+    <rect x="${x}" y="${y}" width="110" height="${h}" rx="4"/>
+    <text x="${cx}" y="${y + 23}" text-anchor="middle" fill="#f7f5f0" font-size="13" font-weight="500">${s.name.replace(" feedback", "")}</text>
+    <text x="${cx}" y="${y + 40}" text-anchor="middle" fill="#aea69c" font-size="11" font-family="DM Mono">feedback · you</text>`;
+  nodesG.appendChild(g);
+});
+
+// ---------- Detail panel ----------
+const detail = document.getElementById("detail");
+function stageHTML(s, compact) {
+  const model = s.modelKey ? MODELS[s.modelKey] : s.model;
+  return `
+    <div class="fade-in">
+      <div class="flex flex-wrap items-baseline justify-between gap-2">
+        <h3>${s.n < 8 ? s.n + ". " : ""}${s.name}</h3>
+        <span class="font-mono text-[12px] text-mute">${esc(s.who)}${model && model !== "—" ? " · " + esc(model) : ""}</span>
+      </div>
+      <p class="mt-2 text-[15px]">${esc(s.does)}</p>
+      <div class="grid sm:grid-cols-2 gap-4 mt-4 text-[13px]">
+        <div><p class="font-mono text-[11px] text-mute">READS</p><p class="text-strong mt-1">${s.reads.map(esc).join(" · ")}</p></div>
+        <div><p class="font-mono text-[11px] text-mute">WRITES</p><p class="text-strong mt-1">${s.writes.map(esc).join(" · ")}</p></div>
+      </div>
+      <p class="font-mono text-[11px] text-mute mt-4">OUTCOMES</p>
+      <ul class="mt-1 space-y-1 text-[14px]">
+        ${s.outcomes.map(([o, t, next]) => `<li><span class="font-mono text-[13px] ${toneClass[t]}">${esc(o)}</span> <span class="text-mute">→</span> ${esc(next)}</li>`).join("")}
+      </ul>
+      ${compact ? "" : `<p class="mt-4"><code>${esc(s.cmd)}</code></p>`}
+    </div>`;
+}
+function select(id) {
+  document.querySelectorAll(".node").forEach(n => n.classList.toggle("sel", n.dataset.id === id));
+  detail.innerHTML = stageHTML(STAGES.find(s => s.id === id));
+}
+document.querySelectorAll(".node").forEach(n => {
+  n.addEventListener("click", () => { stop(); select(n.dataset.id); });
+  n.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); stop(); select(n.dataset.id); } });
+});
+
+// ---------- Stage cards ----------
+document.getElementById("stagecards").innerHTML = STAGES.map(s => `<article class="bg-soft rounded-[4px] p-6">${stageHTML(s)}</article>`).join("");
+
+// ---------- Example job simulation ----------
+const SCRIPT = [
+  { node: "create", edge: null, log: "job 001 created · factory/001-add-dark-mode", text: "The orchestrator writes the title “Add a dark mode toggle to settings” and creates job 001." },
+  { node: "intake", edge: "e-create-intake", log: "intake → BLOCKED · 1 question", text: "Intake finds two settings pages and can't tell which one you mean. It asks one question and stops." },
+  { node: "intake-fb", edge: "e-intake-blocked", log: "you: “account settings” → feedback 1", text: "You answer. The orchestrator appends your reply to intake.md, which reopens it." },
+  { node: "intake", edge: "e-intakefb-intake", log: "intake → ACCEPT · risk low · surfaces ui", text: "Intake decides again with your answer. It accepts, and flags the ui surface because the change is visible on a page. Reviewers will be code + ui." },
+  { node: "spec", edge: "e-intake-spec", log: "worktree created · spec.md · 4 criteria", text: "spec-writer start creates the worktree from origin/main. The spec writer reads intake's scope and writes requirements and 4 checkable acceptance criteria." },
+  { node: "build", edge: "e-spec-build", log: "round 1/3 · build → READY", text: "Round 1. The builder implements the toggle in the worktree, commits, and reports READY." },
+  { node: "gate", edge: "e-build-gate", log: "round 1/3 · gate → FAIL (typecheck)", text: "The gate runs tests, lint, typecheck and build. Typecheck fails, so no reviewer runs. Rounds are left, so it's back to build." },
+  { node: "build", edge: "e-gate-loop", log: "round 2/3 · build → READY", text: "Round 2. The builder reads round-1/gate.md, fixes the type error, and reports READY again." },
+  { node: "gate", edge: "e-build-gate", log: "round 2/3 · gate → PASS", text: "All gate commands pass." },
+  { node: "review", edge: "e-gate-review", log: "round 2/3 · code PASS · ui CHANGES", text: "Code and UI reviewers run in parallel. UI finds a hard-coded color where a theme token exists, and asks for changes." },
+  { node: "build", edge: "e-review-loop", log: "round 3/3 · build → READY", text: "Round 3, the last one allowed. The builder fixes the UI finding and carries its log forward." },
+  { node: "gate", edge: "e-build-gate", log: "round 3/3 · gate → PASS", text: "Gate passes again." },
+  { node: "review", edge: "e-gate-review", log: "round 3/3 · code PASS · ui PASS", text: "Both reviewers confirm their earlier findings were fixed, and pass. Had either asked for changes here, the job would go to the approver as BLOCKED." },
+  { node: "approver", edge: "e-review-approver", log: "approver CHECKS: PASS → APPROVE · PR #42", text: "CHECKS: PASS. Criteria met, scope respected, nothing sensitive. The approver approves; the PR opens with the auto-merge label." },
+  { node: "complete", edge: "e-approver-complete", log: "job 001 complete ✓", text: "The orchestrator records FINISHED in job.md. The PR merges once the host's checks pass." },
+];
+let i = -1, timer = null;
+const logEl = document.getElementById("log");
+const playBtn = document.getElementById("play");
+function clearOn() { document.querySelectorAll(".on").forEach(e => e.classList.remove("on")); }
+function show(k) {
+  clearOn();
+  const s = SCRIPT[k];
+  document.querySelector(`.node[data-id="${s.node}"]`).classList.add("on");
+  if (s.edge) document.getElementById(s.edge).classList.add("on");
+  document.querySelectorAll(".node").forEach(n => n.classList.remove("sel"));
+  const st = STAGES.find(x => x.id === s.node);
+  detail.innerHTML = `<p class="font-mono text-[12px] text-mute fade-in">STEP ${k + 1} OF ${SCRIPT.length}</p><p class="text-[18px] leading-7 text-ink mt-2 fade-in">${esc(s.text)}</p><hr class="border-hair my-4">` + stageHTML(st, true);
+  const li = document.createElement("li");
+  li.className = "fade-in " + (/FAIL|CHANGES/.test(s.log) ? "text-fail" : /BLOCKED|you:/.test(s.log) ? "text-wait" : /✓|APPROVE|PASS|ACCEPT/.test(s.log) ? "text-pass" : "text-body");
+  li.textContent = String(k + 1).padStart(2, "0") + "  " + s.log;
+  logEl.appendChild(li); logEl.scrollTop = logEl.scrollHeight;
+}
+function next() {
+  if (i >= SCRIPT.length - 1) { stop(); return false; }
+  show(++i); return true;
+}
+function stop() { clearInterval(timer); timer = null; playBtn.textContent = "▶ Play example job"; }
+function reset() { stop(); i = -1; clearOn(); logEl.innerHTML = ""; select("create"); }
+playBtn.addEventListener("click", () => {
+  if (timer) { stop(); return; }
+  if (i >= SCRIPT.length - 1) reset();
+  next();
+  timer = setInterval(() => { if (!next()) stop(); }, 2200);
+  playBtn.textContent = "❚❚ Pause";
+});
+document.getElementById("step").addEventListener("click", () => { stop(); if (i >= SCRIPT.length - 1) reset(); next(); });
+document.getElementById("reset").addEventListener("click", reset);
+select("create");
+
+// ---------- Data map ----------
+const FILES = [
+  { f: "job.md", w: ["Orchestrator"], r: ["job.js", "Intake", "Spec writer", "Builder", "Reviewers", "Approver"] },
+  { f: "intake.md", w: ["Intake", "You"], r: ["Orchestrator", "job.js", "Intake", "Spec writer", "Builder", "Approver"] },
+  { f: "spec.md", w: ["Spec writer"], r: ["job.js", "Builder", "Reviewers", "Approver"] },
+  { f: "round-N/build.md", w: ["Builder", "You"], r: ["Orchestrator", "job.js", "Builder", "Reviewers", "Approver"] },
+  { f: "round-N/gate.md", w: ["job.js"], r: ["Orchestrator", "job.js", "Builder", "Reviewers", "Approver"] },
+  { f: "round-N/review-*.md", w: ["Reviewers"], r: ["Orchestrator", "job.js", "Builder", "Reviewers", "Approver"] },
+  { f: "decision.md", w: ["Approver"], r: ["Orchestrator", "job.js", "Pull request"] },
+  { f: "pr.md", w: ["job.js"], r: ["Orchestrator"] },
+];
+const WRITERS = ["You", "Orchestrator", "Intake", "Spec writer", "Builder", "job.js", "Reviewers", "Approver"];
+const READERS = ["Orchestrator", "job.js", "Intake", "Spec writer", "Builder", "Reviewers", "Approver", "Pull request"];
+const dm = document.getElementById("dm");
+const fy = (k) => 70 + k * 62, wy = (k) => 50 + k * 66, ry = (k) => 50 + k * 66;
+let svg = `<text x="90" y="22" text-anchor="middle" fill="#aea69c" font-size="11" font-family="DM Mono">WRITES</text>
+<text x="500" y="22" text-anchor="middle" fill="#aea69c" font-size="11" font-family="DM Mono">JOB FILE</text>
+<text x="910" y="22" text-anchor="middle" fill="#aea69c" font-size="11" font-family="DM Mono">READS</text>`;
+FILES.forEach((file, k) => {
+  file.w.forEach(w => { const a = WRITERS.indexOf(w); svg += `<path class="link" data-f="${k}" data-a="w${a}" d="M170 ${wy(a)} C280 ${wy(a)} 300 ${fy(k)} 400 ${fy(k)}" marker-end="url(#arr)"/>`; });
+  file.r.forEach(r => { const b = READERS.indexOf(r); svg += `<path class="link" data-f="${k}" data-a="r${b}" d="M600 ${fy(k)} C700 ${fy(k)} 720 ${ry(b)} 830 ${ry(b)}" marker-end="url(#arr)"/>`; });
+});
+WRITERS.forEach((w, a) => svg += `<g class="chip" data-a="w${a}" tabindex="0"><rect x="10" y="${wy(a) - 18}" width="160" height="36" rx="4" fill="#383330" stroke="#4d4640"/><text x="90" y="${wy(a) + 5}" text-anchor="middle" fill="#f7f5f0" font-size="13" font-family="Inter">${w}${w === "You" ? " (feedback)" : ""}</text></g>`);
+READERS.forEach((r, b) => svg += `<g class="chip" data-a="r${b}" tabindex="0"><rect x="830" y="${ry(b) - 18}" width="160" height="36" rx="4" fill="#383330" stroke="#4d4640"/><text x="910" y="${ry(b) + 5}" text-anchor="middle" fill="#f7f5f0" font-size="13" font-family="Inter">${r}</text></g>`);
+FILES.forEach((file, k) => svg += `<g class="chip" data-f="${k}" tabindex="0"><rect x="400" y="${fy(k) - 20}" width="200" height="40" rx="4" fill="#2b2622" stroke="#8a8178"/><text x="500" y="${fy(k) + 5}" text-anchor="middle" fill="#dad2c1" font-size="13" font-family="DM Mono">${file.f}</text></g>`);
+dm.insertAdjacentHTML("beforeend", svg);
+function hl(sel) {
+  dm.classList.add("dim");
+  dm.querySelectorAll(sel).forEach(e => e.classList.add("hl"));
+  dm.querySelectorAll(".link.hl").forEach(l => {
+    dm.querySelectorAll(`.chip[data-f="${l.dataset.f}"], .chip[data-a="${l.dataset.a}"]`).forEach(c => c.classList.add("hl"));
+  });
+}
+function unhl() { dm.classList.remove("dim"); dm.querySelectorAll(".hl").forEach(e => e.classList.remove("hl")); }
+dm.querySelectorAll(".chip").forEach(c => {
+  const sel = c.dataset.f !== undefined ? `.link[data-f="${c.dataset.f}"]` : `.link[data-a="${c.dataset.a}"]`;
+  const on = () => { unhl(); c.classList.add("hl"); hl(sel); };
+  c.addEventListener("mouseenter", on); c.addEventListener("focus", on);
+  c.addEventListener("mouseleave", unhl); c.addEventListener("blur", unhl);
+});
+</script>
+</body>
+</html>

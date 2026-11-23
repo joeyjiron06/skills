@@ -13,9 +13,9 @@
 //
 //   test/.sandbox/                         <repo>
 //   test/.sandbox/.worktrees/<id>-<slug>/   <worktree> for a job
-//   test/.sandbox/skills/factory/config.json
-//   test/.sandbox/skills/factory/jobs/      <jobs>
-//   test/.sandbox/skills/factory/scripts/job.js -> skills/factory/scripts/job.js
+//   test/.sandbox/.agents/skills/factory/config.json
+//   test/.sandbox/.agents/skills/factory/jobs/      <jobs>
+//   test/.sandbox/.agents/skills/factory/scripts/job.js -> skills/factory/scripts/job.js
 //
 // Every test spawns the script as a child process, exactly the way agents call
 // it (`node <scripts>/job.js ...`). Node's coverage collects from the children
@@ -39,7 +39,7 @@ import { join, resolve } from "node:path";
 const ROOT = resolve(import.meta.dirname, "..");
 const REAL_FACTORY = join(ROOT, "skills", "factory");
 const SANDBOX = join(import.meta.dirname, ".sandbox");
-const FACTORY = join(SANDBOX, "skills", "factory");
+const FACTORY = join(SANDBOX, ".agents", "skills", "factory");
 const SCRIPT = join(FACTORY, "scripts", "job.js");
 const CONFIG = join(FACTORY, "config.json");
 const JOBS = join(FACTORY, "jobs");
@@ -1039,7 +1039,7 @@ describe("gate", () => {
   test("gate.md is rewritten as each command starts and finishes", () => {
     const id = building();
     // The first command prints gate.md as it is while that command runs.
-    const live = join("..", "..", "skills", "factory", "jobs", id, "round-1", "gate.md");
+    const live = join("..", "..", ".agents", "skills", "factory", "jobs", id, "round-1", "gate.md");
     setGate([`cat ${live}`, "true"]);
     ok("gate", "check", "--id", id, "--round", "1");
 
