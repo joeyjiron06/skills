@@ -8,6 +8,6 @@ The are in constant refinement, and I will add/edit them as I find issues or com
 
 ## Installation
 
-`npx skills@latest add joeyjiron06/{skill_name}`
+`pnpx skills@latest add joeyjiron06/{skill_name}`
 
 See [skills/](./skills/) for a full list of available skills.
